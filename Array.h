@@ -3,21 +3,35 @@
 #include <stdlib.h>
 
 // TODO:
-// * Nested For loops
-// * Fix wrong deinit behavior when one array assigned to another (if deinit implemented with free() in it)
+// * Fix wrong deinit behavior when one array assigned to another (cycling reference, I guess?) (if deinit implemented with free() in it)
+// * Add unordered remove
 
 #define For(arr) \
   int __unique_i(__i_, __LINE__) = 0; \
   if((arr).count > 0) \
-  for (auto it = (arr).data[__unique_i(__i_, __LINE__)]; __unique_i(__i_, __LINE__) < (arr).count; __unique_i(__i_, __LINE__)++, it = (arr).data[__unique_i(__i_, __LINE__)])
+    for (auto it = (arr).data[__unique_i(__i_, __LINE__)]; __unique_i(__i_, __LINE__) < (arr).count; __unique_i(__i_, __LINE__)++, it = (arr).data[__unique_i(__i_, __LINE__)])
 
-#define __unique_i(x, y) __for_do_concat(x, y)
-#define __for_do_concat(x, y) x ## y
+#define For_Pointer(arr) \
+  int __unique_i(__i_, __LINE__) = 0; \
+  if((arr).count > 0) \
+    for (auto it = &((arr).data[__unique_i(__i_, __LINE__)]); __unique_i(__i_, __LINE__) < (arr).count; __unique_i(__i_, __LINE__)++, it = &((arr).data[__unique_i(__i_, __LINE__)]))
 
-// #define For_ptr(arr) for (auto it = (arr).data; (it - (arr).data) < (arr).count; it++)
-// #define For(arr) for (auto __i = 0, it = (arr).data[__i]; __i < (arr).count; __i++, it = (arr).data[__i])
-// #define For(arr) for (auto it = (arr).data; (it - (arr).data) < (arr).count; it++)
+// Version for using in nested loops
+#define For_it(arr, x) \
+  int __unique_i(__i_, __LINE__) = 0; \
+  if((arr).count > 0) \
+    for (auto (x) = (arr).data[__unique_i(__i_, __LINE__)]; __unique_i(__i_, __LINE__) < (arr).count; __unique_i(__i_, __LINE__)++, (x) = (arr).data[__unique_i(__i_, __LINE__)])
 
+#define For_it_Pointer(arr, x) \
+  int __unique_i(__i_, __LINE__) = 0; \
+  if((arr).count > 0) \
+    for (auto (x) = &((arr).data[__unique_i(__i_, __LINE__)]); __unique_i(__i_, __LINE__) < (arr).count; __unique_i(__i_, __LINE__)++, (x) = &((arr).data[__unique_i(__i_, __LINE__)]))
+
+
+#define __unique_i(x, y) __do_concat(x, y)
+#define __do_concat(x, y) x ## y
+
+// JB's for reference:
 // #define Array_Foreach(l, x) \
 //   for (int __i = 0; (__i < (l)->count) ? ((x) = (l)->data[__i]), true : false; __i++) \
                                                                                                                   
@@ -27,53 +41,56 @@
 
 template <typename T>
 struct Array {
-  size_t count = 0;
-  T * data = NULL;
+  int count = -1;
+  T * data = nullptr;
 
-  void init(size_t count = 0);
-  void init(T array[], size_t count);
+  void init(int count = 0);
+  void init(T array[], int count);
   void deinit(); // @Note: WARNING! Frees only data allocated by Array unrecursively!
 
   void reset();
 
-  void add(const T & element);
-  Array<T> join(Array<T> array);
+  void add(const T & value);
+  Array<T> join(Array<T> array); // @Unimplemented
 
-  inline T & get(size_t index);
-  inline void set(size_t index, T value);
+  inline T & get(int index);
+  inline void set(int index, T value);
 
-  T & remove(size_t index);
+  T remove(int index); // @Unimplemented
+  T remove_unordered(int index);
 
-  size_t get_allocated_size() { return allocated_size; }
+  inline T & operator[] (int index) { return get(index); }
 
-  inline T & operator[] (size_t index) { return get(index); }
+  inline T & back()  { return get(count - 1); }
+  inline T & front() { return get(0);         }
+  inline T & pop();
 
-  inline T back()  { return get(count - 1); }
-  inline T front() { return get(0);         }
+  T * find(const T & value); // TODO: Add custom predicate
+  int find_index(const T & value); // TODO: Add custom predicate
 
-  inline T pop();
+  int get_allocated_size() { return allocated_size; } // Meh...
 
 private:
-  inline T * allocate(size_t size);
-  inline T * reallocate(size_t new_size);
+  inline T * allocate(int size);
+  inline T * reallocate(int new_size);
 
-  size_t allocated_size = 0;
-  constexpr static const size_t grow_factor = 2;
-  constexpr static const size_t minimal_size = 8;
+  int allocated_size = -1;
+  constexpr static const int grow_factor = 2;
+  constexpr static const int minimal_size = 8;
 };
 
 #include <string.h>
 #include <assert.h>
 
 template<typename T>
-void Array<T>::init(size_t count) {
+void Array<T>::init(int count) {
   this->data = allocate(count);
   this->count = count;
   memset(data, 0, count);
 }
 
 template<typename T>
-void Array<T>::init(T * array, size_t count) {
+void Array<T>::init(T * array, int count) {
   this->data = allocate(count);
   this->count = count;
 
@@ -84,7 +101,8 @@ template<typename T>
 void Array<T>::deinit() {
   if (data) {
     free(data);
-    allocated_size = 0;
+    allocated_size = -1;
+    count = -1;
   }
 }
 
@@ -95,45 +113,56 @@ void Array<T>::reset() {
 }
 
 template<typename T>
-inline T * Array<T>::allocate(size_t requested_size) {
+inline T * Array<T>::allocate(int requested_size) {
   if (requested_size <= minimal_size)
     allocated_size = minimal_size;
   else
     allocated_size = requested_size;
 
-  return (T *)malloc(sizeof(T)*allocated_size);
+  return static_cast <T *>(malloc(sizeof(T)*allocated_size));
 }
 
 template<typename T>
-inline T * Array<T>::reallocate(size_t new_size) {
+inline T * Array<T>::reallocate(int new_size) {
   if (new_size <= allocated_size) return data;
     
   allocated_size = new_size;
-  return (T *)realloc(data, sizeof(T)*allocated_size);
+  return static_cast <T *>(realloc(data, sizeof(T)*allocated_size));
 }
 
 template<typename T>
-void Array<T>::add(const T & element) {
-  if(data == NULL) {
-    data = allocate(minimal_size);
+void Array<T>::add(const T & value) {
+  if(data == nullptr) {
+    init();
   } else if (count == allocated_size) {
     data = reallocate(allocated_size * grow_factor);
   }
 
   count += 1;
-  data[count-1] = element;
+  data[count-1] = value;
 }
 
 template<typename T>
-T Array<T>::pop() {
+T & Array<T>::pop() {
   assert(count > 0);
   count -= 1;
   return data[count];
 }
 
 template<typename T>
-T & Array<T>::remove(size_t index) {
+T Array<T>::remove(int index) {
   assert(0 && "Unimplemented");
+}
+
+template<typename T>
+T Array<T>::remove_unordered(int index) {
+  T removed_value = data[index];
+  data[index] = data[count - 1];
+  data[count - 1] = removed_value;
+
+  count -= 1;
+
+  return removed_value;
 }
 
 template<typename T>
@@ -142,13 +171,33 @@ Array<T> Array<T>::join(Array<T> array) {
 }
 
 template <typename T>
-inline void Array<T>::set(size_t index, T value) {
+inline void Array<T>::set(int index, T value) {
   assert(0 <= index && index < count && "Attempt to index array out of its bounds");
   data[index] = value;
 }
 
 template <typename T>
-inline T & Array<T>::get(size_t index) {
+inline T & Array<T>::get(int index) {
   assert(0 <= index && index < count && "Attempt to index array out of its bounds");
   return data[index];
+}
+
+template <typename T>
+T * Array<T>::find(const T & value) {
+  for (int i = 0; i < count; i++) {
+    if (data[i] == value) {
+      return &(data[i]);
+    }
+  }
+  return nullptr;
+}
+
+template <typename T>
+int Array<T>::find_index(const T & value) {
+  for (int i = 0; i < count; i++) {
+    if (data[i] == value) {
+      return i;
+    }
+  }
+  return -1;
 }

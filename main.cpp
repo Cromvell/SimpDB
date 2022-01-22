@@ -18,6 +18,7 @@
 #include "common.h"
 #include "defer.h"
 #include "Array.h"
+#include "Hash_Table.h"
 
 #pragma GCC diagnostic ignored "-Wwrite-strings"
 
@@ -104,7 +105,7 @@ struct Debug_Info {
   char * program_name;
   u32 pid;
 
-  Array<Breakpoint *> breakpoints; // @Note: Maybe store whole breakpoints?
+  Hash_Table<u64, Breakpoint *> breakpoints;
 
   dwarf::dwarf dwarf;
   elf::elf elf;
@@ -146,7 +147,7 @@ Breakpoint *debugger_set_breakpoint(Debug_Info *dbg, u64 address) {
   breakpoint->enabled = false;
   breakpoint->address = address;
 
-  dbg->breakpoints.add(breakpoint);
+  dbg->breakpoints.insert(address, &breakpoint);
 
   enable_breakpoint(breakpoint);
 
@@ -163,27 +164,20 @@ void debugger_remove_breakpoint(Debug_Info *dbg, Breakpoint *breakpoint) {
 
   // :HashTableImplementation
   // TODO: Write a hash table for proper removal of breakpoint from index
-  For (breakpoint->dbg->breakpoints) {
-    if (it->address == breakpoint->address) {
-      it = nullptr; // :NullPointerInBreakpoints
-    }
-  }
+  breakpoint->dbg->breakpoints.remove(breakpoint->address); // :NullPointerInBreakpoints
 
   free(breakpoint);
 }
 
-// WARNING!: Leaves null pointer in dbg->breakpoints for now! TODO: implement hash table or remove for array
 void debugger_remove_breakpoint_at_address(Debug_Info *dbg, u64 address) {
-  Breakpoint *breakpoint = nullptr;
-  For (dbg->breakpoints) {
-    if (it->address == address) {
-      if (it->enabled)  disable_breakpoint(it);
-      breakpoint = it;
-      it = nullptr;
-    }
-  }
+  Breakpoint **res = dbg->breakpoints[address];
+  if (res) {
+    auto breakpoint = *res;
+    if (breakpoint->enabled)  disable_breakpoint(breakpoint);
+    dbg->breakpoints.remove(address);
 
-  if (breakpoint)  free(breakpoint);
+    if (breakpoint)  free(breakpoint);
+  }
 }
 
 void enable_breakpoint(Breakpoint *breakpoint) {
@@ -624,31 +618,21 @@ void debugger_single_instruction_step(Debug_Info *dbg) {
 void debugger_step_over_breakpoint(Debug_Info *dbg) {
   // :HashTableImplementation
   // TODO: Write a hash table for breakpoints indexing
-  For (dbg->breakpoints) {
-    if (it->address == debugger_get_pc(dbg)) {
-      auto &bp = it;
+  auto res = dbg->breakpoints[debugger_get_pc(dbg)];
+  if (!res)  return;
+  auto bp = *res;
 
-      if (bp->enabled) {
-        disable_breakpoint(bp);
-        debugger_single_instruction_step(dbg);
-        enable_breakpoint(bp);
-      }
-
-      break;
-    }
+  if (bp && bp->enabled) {
+    disable_breakpoint(bp);
+    debugger_single_instruction_step(dbg);
+    enable_breakpoint(bp);
   }
 }
 
 void debugger_single_instruction_step_with_breakpoint_check(Debug_Info *dbg) {
-  bool on_breakpoint = false;
   // :HashTableImplementation
   // TODO: Write a hash table for breakpoints indexing
-  For (dbg->breakpoints) {
-    if (it->address == debugger_get_pc(dbg)) {
-      on_breakpoint = true;
-      break;
-    }
-  }
+  bool on_breakpoint = dbg->breakpoints.exists(debugger_get_pc(dbg));
 
   if (on_breakpoint) {
     debugger_step_over_breakpoint(dbg);
@@ -685,15 +669,9 @@ void debugger_step_out(Debug_Info *dbg) {
   auto base_pointer = debugger_read_register(dbg, Register::rbp);
   auto return_address = debugger_read_memory(dbg, base_pointer + 8);
 
-  bool return_breakpoint_exists = false;
   // :HashTableImplementation
   // TODO: Write a hash table for breakpoints indexing
-  For (dbg->breakpoints) {
-    if (it->address == return_address) {
-      return_breakpoint_exists = true;
-      break;
-    }
-  }
+  bool return_breakpoint_exists = dbg->breakpoints.exists(return_address);
 
   bool should_remove_breakpoint = false;
   Breakpoint *return_breakpoint = nullptr;
@@ -706,7 +684,6 @@ void debugger_step_out(Debug_Info *dbg) {
 
   if (should_remove_breakpoint) {
     debugger_remove_breakpoint(dbg, return_breakpoint);
-    dbg->breakpoints.pop(); // :NullPointerInBreakpoints
   }
 }
 
@@ -724,15 +701,9 @@ void debugger_step_over(Debug_Info *dbg) {
   while (line->address < func_end) {
     auto load_address = debugger_offset_dwarf_address(dbg, line->address);
     if (line->address != current_line->address) {
-      bool exists_breakpoint_with_load_address = false;
       // :HashTableImplementation
       // TODO: Write a hash table for breakpoints indexing
-      For (dbg->breakpoints) {
-        if (it->address == load_address) {
-          exists_breakpoint_with_load_address = true;
-          break;
-        }
-      }
+      bool exists_breakpoint_with_load_address = dbg->breakpoints.exists(load_address);
 
       if (!exists_breakpoint_with_load_address) {
         auto breakpoint = debugger_set_breakpoint(dbg, load_address);
@@ -746,15 +717,9 @@ void debugger_step_over(Debug_Info *dbg) {
   auto base_pointer = debugger_read_register(dbg, Register::rbp);
   auto return_address = debugger_read_memory(dbg, base_pointer + 8);
 
-  bool return_breakpoint_exists = false;
   // :HashTableImplementation
   // TODO: Write a hash table for breakpoints indexing
-  For (dbg->breakpoints) {
-    if (it->address == return_address) {
-      return_breakpoint_exists = true;
-      break;
-    }
-  }
+  bool return_breakpoint_exists = dbg->breakpoints.exists(return_address);
 
   if (!return_breakpoint_exists) {
     auto return_breakpoint = debugger_set_breakpoint(dbg, return_address);
@@ -765,7 +730,6 @@ void debugger_step_over(Debug_Info *dbg) {
 
   For (to_delete) {
     debugger_remove_breakpoint(dbg, it);
-    dbg->breakpoints.pop(); // :NullPointerInBreakpoints
   }
 }
 
@@ -876,11 +840,13 @@ void handle_command(Debug_Info *dbg, char * line) {
         
       default: {
         std::cout << "Currently set breakpoints: " << std::endl;
+        std::cout << "Not impemented for hash table yet! " << std::endl;
 
-        u32 count = 0;
-        For (dbg->breakpoints) {
-          printf("Breakpoint #%d at address 0x%lx; enabled status: %d\n", count++, it->address, it->enabled);
-        }
+        // TODO: Implement iteration for hash table
+        // u32 count = 0;
+        // For (dbg->breakpoints) {
+        //   printf("Breakpoint #%d at address 0x%lx; enabled status: %d\n", count++, it->address, it->enabled);
+        // }
         break;
       }
       }
@@ -896,14 +862,20 @@ void handle_command(Debug_Info *dbg, char * line) {
 
         char filename[256];
         strncpy(filename, file_and_line[0].start, file_and_line[0].length);
+        auto line = std::stoi(file_and_line[1].start);
 
-        auto res = debugger_set_breakpoint_at_source_line(dbg, filename, std::stoi(file_and_line[1].start));
-        if (!res) {
+        auto success = debugger_set_breakpoint_at_source_line(dbg, filename, line);
+        if (success) {
+          std::cout << "Breakpoint's been set in file " << filename << " on line " << line << std::endl;
+        } else {
           std::cerr << "ERROR: Cannot set breakpoint" << std::endl;
         }
       } else {
-        auto res = debugger_set_breakpoint_at_function(dbg, args[1].start);
-        if (!res) {
+        auto success = debugger_set_breakpoint_at_function(dbg, args[1].start);
+
+        if (success) {
+          std::cout << "Breakpoint's been set on function " << args[1].start << std::endl;
+        } else {
           std::cerr << "ERROR: Cannot set breakpoint" << std::endl;
         }
       }
