@@ -14,37 +14,34 @@
 
 template <typename K, typename T>
 struct Hash_Table_Item {
-  K key = nullptr;
-  T *value = nullptr;
+  K key;
+  T value;
 
   static Hash_Table_Item<K, T> REMOVED_ITEM;
 };
 
 template <typename K, typename T>
-Hash_Table_Item<K, T> Hash_Table_Item<K, T>::REMOVED_ITEM = {K(), nullptr};
+Hash_Table_Item<K, T> Hash_Table_Item<K, T>::REMOVED_ITEM = {(K)NULL, (T)NULL};
 
 // TODO: Eliminate too much mallocs... and if possible, too much templates...
 template <typename K, typename T>
-static Hash_Table_Item<K, T> *hash_table_item_init(K key, T *value) {
+static Hash_Table_Item<K, T> *hash_table_item_init(K key, T value) {
   Hash_Table_Item<K, T> *new_item = static_cast <Hash_Table_Item<K, T> *>(malloc(sizeof(Hash_Table_Item<K, T>)));
 
   new_item->key = key;
-
-  new_item->value = static_cast <T *>(malloc(sizeof(T)));
-  memcpy(new_item->value, value, sizeof(T));
+  new_item->value = value;
 
   return new_item;
 }
 
 template <typename T>
-static Hash_Table_Item<char *, T> *hash_table_item_init(char *key, T *value) {
+static Hash_Table_Item<char *, T> *hash_table_item_init(char *key, T value) {
   Hash_Table_Item<char *, T> *new_item = static_cast <Hash_Table_Item<char *, T> *>(malloc(sizeof(Hash_Table_Item<char *, T>)));
 
   new_item->key = strdup(key);
   if (new_item->key == nullptr)  return nullptr; 
 
-  new_item->value = static_cast <T *>(malloc(sizeof(T)));
-  memcpy(new_item->value, value, sizeof(T));
+  new_item->value = value;
 
   return new_item;
 }
@@ -52,17 +49,13 @@ static Hash_Table_Item<char *, T> *hash_table_item_init(char *key, T *value) {
 
 template <typename K, typename T>
 static void hash_table_item_delete(Hash_Table_Item<K, T> *hash_table_item) {
-  if (hash_table_item) {
-    if (hash_table_item->value)  free(hash_table_item->value);
-    free(hash_table_item);
-  }
+  if (hash_table_item)  free(hash_table_item);
 }
 
 template <char *, typename T>
 static void hash_table_item_delete(Hash_Table_Item<char *, T> *hash_table_item) {
   if (hash_table_item) {
     if (hash_table_item->key)    free(hash_table_item->key);
-    if (hash_table_item->value)  free(hash_table_item->value);
     free(hash_table_item);
   }
 }
@@ -98,7 +91,7 @@ struct Hash_Table {
 
   inline bool exists(K key) { return search(key) != nullptr; }
 
-  void insert(K key, T * value);
+  void insert(K key, T value);
   void remove(K key);
   T * search(K key);
 
@@ -152,7 +145,7 @@ void Hash_Table<K, T>::deinit() {
 }
 
 template <typename K, typename T>
-void Hash_Table<K, T>::insert(K key, T * value) {
+void Hash_Table<K, T>::insert(K key, T value) {
   if (items == nullptr || allocated_size == -1) {
     init();
   }
@@ -230,7 +223,7 @@ T * Hash_Table<K, T>::search(K key) {
   while (item != nullptr) {
     if (item != &Hash_Table_Item<K, T>::REMOVED_ITEM) {
       if (keys_equal(item->key, key, key_length)) {
-        return item->value;
+        return &(item->value);
       }
     }
     index = get_hash<K>(key, key_length, allocated_size, attempt++);

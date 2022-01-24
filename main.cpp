@@ -147,7 +147,7 @@ Breakpoint *debugger_set_breakpoint(Debug_Info *dbg, u64 address) {
   breakpoint->enabled = false;
   breakpoint->address = address;
 
-  dbg->breakpoints.insert(address, &breakpoint);
+  dbg->breakpoints.insert(address, breakpoint);
 
   enable_breakpoint(breakpoint);
 
@@ -162,8 +162,6 @@ void debugger_remove_breakpoint(Debug_Info *dbg, Breakpoint *breakpoint) {
     disable_breakpoint(breakpoint);
   }
 
-  // :HashTableImplementation
-  // TODO: Write a hash table for proper removal of breakpoint from index
   breakpoint->dbg->breakpoints.remove(breakpoint->address); // :NullPointerInBreakpoints
 
   free(breakpoint);
@@ -616,8 +614,6 @@ void debugger_single_instruction_step(Debug_Info *dbg) {
 }
 
 void debugger_step_over_breakpoint(Debug_Info *dbg) {
-  // :HashTableImplementation
-  // TODO: Write a hash table for breakpoints indexing
   auto res = dbg->breakpoints[debugger_get_pc(dbg)];
   if (!res)  return;
   auto bp = *res;
@@ -630,8 +626,6 @@ void debugger_step_over_breakpoint(Debug_Info *dbg) {
 }
 
 void debugger_single_instruction_step_with_breakpoint_check(Debug_Info *dbg) {
-  // :HashTableImplementation
-  // TODO: Write a hash table for breakpoints indexing
   bool on_breakpoint = dbg->breakpoints.exists(debugger_get_pc(dbg));
 
   if (on_breakpoint) {
@@ -669,8 +663,6 @@ void debugger_step_out(Debug_Info *dbg) {
   auto base_pointer = debugger_read_register(dbg, Register::rbp);
   auto return_address = debugger_read_memory(dbg, base_pointer + 8);
 
-  // :HashTableImplementation
-  // TODO: Write a hash table for breakpoints indexing
   bool return_breakpoint_exists = dbg->breakpoints.exists(return_address);
 
   bool should_remove_breakpoint = false;
@@ -701,8 +693,6 @@ void debugger_step_over(Debug_Info *dbg) {
   while (line->address < func_end) {
     auto load_address = debugger_offset_dwarf_address(dbg, line->address);
     if (line->address != current_line->address) {
-      // :HashTableImplementation
-      // TODO: Write a hash table for breakpoints indexing
       bool exists_breakpoint_with_load_address = dbg->breakpoints.exists(load_address);
 
       if (!exists_breakpoint_with_load_address) {
@@ -717,8 +707,6 @@ void debugger_step_over(Debug_Info *dbg) {
   auto base_pointer = debugger_read_register(dbg, Register::rbp);
   auto return_address = debugger_read_memory(dbg, base_pointer + 8);
 
-  // :HashTableImplementation
-  // TODO: Write a hash table for breakpoints indexing
   bool return_breakpoint_exists = dbg->breakpoints.exists(return_address);
 
   if (!return_breakpoint_exists) {
