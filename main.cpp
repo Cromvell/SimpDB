@@ -167,7 +167,7 @@ void debugger_remove_breakpoint(Debug_Info *dbg, Breakpoint *breakpoint) {
   free(breakpoint);
 }
 
-void debugger_remove_breakpoint_at_address(Debug_Info *dbg, u64 address) {
+bool debugger_remove_breakpoint_at_address(Debug_Info *dbg, u64 address) {
   Breakpoint **res = dbg->breakpoints[address];
   if (res) {
     auto breakpoint = *res;
@@ -175,6 +175,9 @@ void debugger_remove_breakpoint_at_address(Debug_Info *dbg, u64 address) {
     dbg->breakpoints.remove(address);
 
     if (breakpoint)  free(breakpoint);
+    return true;
+  } else {
+    return false;
   }
 }
 
@@ -852,17 +855,17 @@ void handle_command(Debug_Info *dbg, char * line) {
         strncpy(filename, file_and_line[0].start, file_and_line[0].length);
         auto line = std::stoi(file_and_line[1].start);
 
-        auto success = debugger_set_breakpoint_at_source_line(dbg, filename, line);
-        if (success) {
-          std::cout << "Breakpoint's been set in file " << filename << " on line " << line << std::endl;
+        auto breakpoint = debugger_set_breakpoint_at_source_line(dbg, filename, line);
+        if (breakpoint) {
+          std::cout << "Breakpoint's been set in file " << filename << " on line " << line  << "; address 0x" << std::hex << breakpoint->address << std::endl;
         } else {
           std::cerr << "ERROR: Cannot set breakpoint" << std::endl;
         }
       } else {
-        auto success = debugger_set_breakpoint_at_function(dbg, args[1].start);
+        auto breakpoint = debugger_set_breakpoint_at_function(dbg, args[1].start);
 
-        if (success) {
-          std::cout << "Breakpoint's been set on function " << args[1].start << std::endl;
+        if (breakpoint) {
+          std::cout << "Breakpoint's been set on function " << args[1].start << "; address 0x" << std::hex << breakpoint->address << std::endl;
         } else {
           std::cerr << "ERROR: Cannot set breakpoint" << std::endl;
         }
@@ -870,6 +873,23 @@ void handle_command(Debug_Info *dbg, char * line) {
     }
     break;
   }
+
+  case 'd':
+    if (args.count > 1) {
+      if (args[1].start[0] == '0' && args[1].start[1] == 'x' && args[1].length > 2) {
+        char *str_hex = args[1].start + 2;
+        auto success = debugger_remove_breakpoint_at_address(dbg, std::stol(str_hex, 0, 16));
+
+        if (success) {
+          std::cout << "Breakpoint's " << args[1].start << " been removed." << std::endl;
+        } else {
+          std::cerr << "ERROR: Cannot delete breakpoint" << std::endl;
+        }
+      }
+    } else {
+      std::cerr << "USAGE: d breakpoint_address" << std::endl;
+    }
+    break;
 
   case 's':
     if (command.length > 1) {

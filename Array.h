@@ -59,7 +59,7 @@ struct Array {
   T remove(int index); // @Unimplemented
   T remove_unordered(int index);
 
-  inline T & operator[] (int index) { return get(index); }
+  inline T & operator [](int index) { return get(index); }
 
   inline T & back()  { return get(count - 1); }
   inline T & front() { return get(0);         }
@@ -70,13 +70,14 @@ struct Array {
 
   int get_allocated_size() { return allocated_size; } // Meh...
 
+  int grow_factor = 2;
+  int minimal_size = 8;
+
 private:
   inline T * allocate(int size);
   inline T * reallocate(int new_size);
 
   int allocated_size = -1;
-  constexpr static const int grow_factor = 2;
-  constexpr static const int minimal_size = 8;
 };
 
 #include <string.h>
@@ -134,7 +135,7 @@ template<typename T>
 void Array<T>::add(const T & value) {
   if(data == nullptr) {
     init();
-  } else if (count == allocated_size) {
+  } else if (count >= allocated_size) {
     data = reallocate(allocated_size * grow_factor);
   }
 
