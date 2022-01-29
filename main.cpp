@@ -11,6 +11,8 @@
 #include <string.h>
 #include <fcntl.h>
 
+#include <cxxabi.h>
+
 #include "include/linenoise.h"
 #include "dwarf/dwarf++.hh"
 #include "elf/elf++.hh"
@@ -23,7 +25,16 @@
 #pragma GCC diagnostic ignored "-Wwrite-strings"
 
 // Plan: Write out debugging lib, which can be used in ImGui graphical program
-
+// * Support for inline, member function, as well for overloads
+// * Add conditional breakpoints
+// * Figure out how to deal with multiple breakpoints on one line. Currnetly setting up new breakpoint leak an old one.
+// * Remove exception throws
+// * Handle process termination
+// * Handle address randomization
+// * Attach to a process
+// * process_vm_readv and process_vm_writev
+// * Lib API
+// * ImGUI
 
 struct Argument_String {
   char *start;
@@ -154,7 +165,6 @@ Breakpoint *debugger_set_breakpoint(Debug_Info *dbg, u64 address) {
   return breakpoint;
 }
 
-// WARNING!: Leaves null pointer in dbg->breakpoints for now! TODO: implement hash table or remove for array
 void debugger_remove_breakpoint(Debug_Info *dbg, Breakpoint *breakpoint) {
   if (!breakpoint)  return;
 
@@ -209,16 +219,18 @@ void disable_breakpoint(Breakpoint *breakpoint) {
 
 // TODO: Handle inline, member functions as well as function overloads
 Breakpoint *debugger_set_breakpoint_at_function(Debug_Info *dbg, char *function_name) {
-  auto len = strlen(function_name);
+  auto function_name_len = strlen(function_name);
   for (const auto &cu : dbg->dwarf.compilation_units()) {
     for (const auto &die : cu.root()) {
-      // std::cout << "DWARF NAME: " << at_name(die) << std::endl;
-      // printf("FUNCT NAME: %s\n", function_name);
-      if (die.has(dwarf::DW_AT::name) && strncmp(at_name(die).c_str(), function_name, std::min(at_name(die).size(), len)) == 0) {
-        auto low_pc = at_low_pc(die);
-        auto entry = debugger_get_line_entry_from_pc(dbg, low_pc);
-        ++entry; // skip function prologue
-        return debugger_set_breakpoint(dbg, debugger_offset_dwarf_address(dbg, entry->address));
+      if (die.has(dwarf::DW_AT::name) && die.tag == dwarf::DW_TAG::subprogram) {
+        if (strncmp(at_name(die).c_str(), function_name, function_name_len) == 0) {
+          if (die.has(dwarf::DW_AT::low_pc)) {
+            auto low_pc = at_low_pc(die);
+            auto entry = debugger_get_line_entry_from_pc(dbg, low_pc);
+            ++entry; // skip function prologue
+            return debugger_set_breakpoint(dbg, debugger_offset_dwarf_address(dbg, entry->address));
+          }
+        }
       }
     }
   }
@@ -278,12 +290,6 @@ struct Symbol {
   u64 address;
 };
 
-bool match_with_mangled_name(char *mangled_name, char* matching_name) {
-  assert(0 && "Unimplemented");
-}
-
-// TODO: Make lookup symbol cached
-// TODO: Add support for mangled names: https://en.wikipedia.org/wiki/Name_mangling#Demangle_via_builtin_GCC_ABI
 Array<Symbol> debugger_lookup_symbol(Debug_Info *dbg, char *name) {
   Array<Symbol> syms;
 
@@ -292,11 +298,31 @@ Array<Symbol> debugger_lookup_symbol(Debug_Info *dbg, char *name) {
     if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym)  continue;
 
     for (auto sym : sec.as_symtab()) {
-      auto symtab_name = sym.get_name().c_str();
-      auto symtab_name_len = strlen(symtab_name);
-      if (symtab_name_len > 0 && strncmp(symtab_name, name, std::min(symtab_name_len, name_len)) == 0) {
-        auto &d = sym.get_data();
-        syms.add((Symbol){to_symbol_type(d.type()), name, d.value});
+      size_t symtab_name_len = -1;
+      auto symtab_name = sym.get_name(&symtab_name_len);
+
+      if (symtab_name_len > 0) {
+        if (symtab_name_len >= 2 && symtab_name[0] == '_' && symtab_name[1] == 'Z') {
+          s32 status = -1;
+
+          char *demangled_name = abi::__cxa_demangle(symtab_name, NULL, NULL, &status);
+
+          if (status == 0 && strstr(demangled_name, name)) {
+            auto &d = sym.get_data();
+            syms.add((Symbol){to_symbol_type(d.type()), demangled_name, d.value});
+          } else {
+            free(demangled_name); // Free, if not adding to syms array
+          }
+        } else {
+          if (strstr(symtab_name, name)) {
+            auto &d = sym.get_data();
+
+            auto symbol_name = static_cast <char *>(malloc(symtab_name_len));
+            strncpy(symbol_name, symtab_name, symtab_name_len);
+
+            syms.add((Symbol){to_symbol_type(d.type()), symbol_name, d.value});
+          }
+        }
       }
     }
   }
@@ -324,7 +350,6 @@ struct Register_Descriptor {
   char *name;
 };
 
-// TODO: Write custom static local array implementation
 const Register_Descriptor global_register_descriptors[registers_count] = {
   { Register::r15, 15, "r15" },
   { Register::r14, 14, "r14" },
@@ -439,7 +464,9 @@ Register get_register_from_name(char *name) {
 
   const Register_Descriptor *match = nullptr;
   For_Count (registers_count, i) {
-    if (strncmp(global_register_descriptors[i].name, name, name_length) == 0)  match = &(global_register_descriptors[i]);
+    if (strncmp(global_register_descriptors[i].name, name, name_length) == 0) {
+      match = &(global_register_descriptors[i]);
+    }
   }
 
   if (match == nullptr) {
@@ -661,7 +688,6 @@ void debugger_continue_execution(Debug_Info *dbg) {
   debugger_wait_for_signal(dbg);
 }
 
-// TODO: Fix stepping through brakepoint on the way to out of the function
 void debugger_step_out(Debug_Info *dbg) {
   auto base_pointer = debugger_read_register(dbg, Register::rbp);
   auto return_address = debugger_read_memory(dbg, base_pointer + 8);
@@ -691,7 +717,12 @@ void debugger_step_over(Debug_Info *dbg) {
   auto current_line = debugger_get_line_entry_from_pc(dbg, debugger_get_offset_pc(dbg));
 
   Array<Breakpoint *> to_delete;
-  defer { to_delete.deinit(); };
+  defer {
+    For (to_delete) {
+      debugger_remove_breakpoint(dbg, it);
+    }
+    to_delete.deinit();
+  };
 
   while (line->address < func_end) {
     auto load_address = debugger_offset_dwarf_address(dbg, line->address);
@@ -718,10 +749,6 @@ void debugger_step_over(Debug_Info *dbg) {
   }
 
   debugger_continue_execution(dbg);
-
-  For (to_delete) {
-    debugger_remove_breakpoint(dbg, it);
-  }
 }
 
 inline void output_frame(dwarf::die function) {
@@ -746,7 +773,6 @@ void debugger_print_backtrace(Debug_Info *dbg) {
   }
 }
 
-// TODO: Get rid of this shiz, when get rid of elfin dependency
 class ptrace_expr_context : public dwarf::expr_context {
 public:
   ptrace_expr_context(pid_t pid, u64 load_address) : pid(pid), load_address(load_address) {}
@@ -798,17 +824,16 @@ void debugger_read_variables(Debug_Info *dbg) {
   }
 }
 
-// TODO: Make debugger input agnostic to number representation (binary/hex/oct/other)
 // TODO: Implement attach to a processes
 // TODO: Add debugger termination handling and kill tracee along with it
-void handle_command(Debug_Info *dbg, char * line) {
+bool handle_command(Debug_Info *dbg, char * line) {
   auto args = split(line);
   defer { args.deinit(); };
 
   auto &command = args[0];
 
   // TODO: Repeating last commmand on empty input
-  if (command.length == 0)  return;
+  if (command.length == 0)  return true;
 
   // TODO: Write parse_command()?
   // switch (parse_command(command)) {
@@ -818,6 +843,10 @@ void handle_command(Debug_Info *dbg, char * line) {
   //   break;
   // }
   switch (command.start[0]) {
+  case 'q': // QUIT
+    return false;
+    break;
+
   case 'c': // CONTINUE
     debugger_continue_execution(dbg);
     break;
@@ -857,7 +886,7 @@ void handle_command(Debug_Info *dbg, char * line) {
 
         auto breakpoint = debugger_set_breakpoint_at_source_line(dbg, filename, line);
         if (breakpoint) {
-          std::cout << "Breakpoint's been set in file " << filename << " on line " << line  << "; address 0x" << std::hex << breakpoint->address << std::endl;
+          std::cout << "Breakpoint's been set in file " << filename << " on line " << line  << std::dec << "; address 0x" << std::hex << breakpoint->address << std::endl;
         } else {
           std::cerr << "ERROR: Cannot set breakpoint" << std::endl;
         }
@@ -865,7 +894,7 @@ void handle_command(Debug_Info *dbg, char * line) {
         auto breakpoint = debugger_set_breakpoint_at_function(dbg, args[1].start);
 
         if (breakpoint) {
-          std::cout << "Breakpoint's been set on function " << args[1].start << "; address 0x" << std::hex << breakpoint->address << std::endl;
+          std::cout << "Breakpoint's been set on function; address 0x" << std::hex << breakpoint->address << std::endl;
         } else {
           std::cerr << "ERROR: Cannot set breakpoint" << std::endl;
         }
@@ -904,13 +933,21 @@ void handle_command(Debug_Info *dbg, char * line) {
       }
 
       auto syms = debugger_lookup_symbol(dbg, args[1].start);
-      defer { syms.deinit(); };
+      defer {
+        For (syms) {
+          if (it.name)  {
+            free(it.name);
+          }
+        }
+        syms.deinit();
+      };
 
       std::cout << "MATCHED SYMBOLS: " << std::endl;
       std::cout << "TYPE\tNAME\tADDRESS" << std::endl;
       For (syms) {
         printf("%s\t%s\t0x%lx\n", to_string(it.type), it.name, it.address);
       }
+
       break;
     }
     } else { // STEP SINGLE SOURCE LINE
@@ -1033,6 +1070,8 @@ void handle_command(Debug_Info *dbg, char * line) {
     std::cerr << "ERROR: Unknown command" << std::endl;
     break;
   }
+
+  return true;
 }
 
 void debugger_loop(Debug_Info *dbg) {
@@ -1043,7 +1082,10 @@ void debugger_loop(Debug_Info *dbg) {
   // @Temporary: Move from CLI based debugger to ImGUI one
   char *line = nullptr;
   while ((line = linenoise("dbg> ")) != nullptr) {
-    handle_command(dbg, line);
+    auto continue_run = handle_command(dbg, line);
+
+    if (!continue_run)  break;
+
     linenoiseHistoryAdd(line);
     linenoiseFree(line);
   }
@@ -1065,9 +1107,14 @@ s32 main(s32 argc, char **argv) {
   } else if (pid >= 1) {
     std::cout << "Started debugging process " << pid << std::endl;
 
-    Debug_Info *info = static_cast<Debug_Info *> (malloc(sizeof(Debug_Info))); // @Leak we don't care about
+    Debug_Info *info = static_cast<Debug_Info *> (malloc(sizeof(Debug_Info)));
     info->program_name = program_name;
     info->pid = pid;
+
     debugger_loop(info);
+
+    // @Leak: Not freeing internal pointers, and don't care that much
+    info->breakpoints.deinit();
+    free(info);
   }
 }
