@@ -222,8 +222,22 @@ Breakpoint *debugger_set_breakpoint_at_function(Debug_Info *dbg, char *function_
   auto function_name_len = strlen(function_name);
   for (const auto &cu : dbg->dwarf.compilation_units()) {
     for (const auto &die : cu.root()) {
-      if (die.has(dwarf::DW_AT::name) && die.tag == dwarf::DW_TAG::subprogram) {
-        if (strncmp(at_name(die).c_str(), function_name, function_name_len) == 0) {
+      if (die.tag == dwarf::DW_TAG::subprogram) {
+        std::string die_function_name;
+        if (die.has(dwarf::DW_AT::name)) {
+          die_function_name = at_name(die);
+        } else if (die.has(dwarf::DW_AT::specification)) {
+          auto member_function_die = at_specification(die);
+          if (member_function_die.has(dwarf::DW_AT::name)) {
+            member_function_die[dwarf::DW_AT::name].as_string(die_function_name);
+          } else {
+            continue;
+          }
+        } else {
+          continue;
+        }
+
+        if (strncmp(die_function_name.c_str(), function_name, function_name_len) == 0) {
           if (die.has(dwarf::DW_AT::low_pc)) {
             auto low_pc = at_low_pc(die);
             auto entry = debugger_get_line_entry_from_pc(dbg, low_pc);
@@ -497,7 +511,7 @@ dwarf::die debugger_get_function_from_pc(Debug_Info *dbg, u64 pc) {
     if (dwarf::die_pc_range(cu.root()).contains(pc)) {
       for (const auto &die : cu.root()) {
         if (die.tag == dwarf::DW_TAG::subprogram) {
-          if (dwarf::die_pc_range(die).contains(pc)) {
+          if (die.has(dwarf::DW_AT::low_pc) && dwarf::die_pc_range(die).contains(pc)) {
             return die;
           }
         }
@@ -757,6 +771,7 @@ inline void output_frame(dwarf::die function) {
 }
 
 // :NotLib
+// TODO: Support for member function
 void debugger_print_backtrace(Debug_Info *dbg) {
   auto func = debugger_get_function_from_pc(dbg, debugger_offset_load_address(dbg, debugger_get_pc(dbg)));
   output_frame(func);
