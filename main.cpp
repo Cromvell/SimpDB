@@ -225,7 +225,7 @@ Breakpoint *debugger_set_breakpoint_at_function(Debug_Info *dbg, char *function_
       if (die.tag == dwarf::DW_TAG::subprogram) {
         std::string die_function_name;
         if (die.has(dwarf::DW_AT::name)) {
-          die_function_name = at_name(die);
+          die[dwarf::DW_AT::name].as_string(die_function_name);
         } else if (die.has(dwarf::DW_AT::specification)) {
           auto member_function_die = at_specification(die);
           if (member_function_die.has(dwarf::DW_AT::name)) {
@@ -505,7 +505,6 @@ void debugger_load_debug_info(Debug_Info *dbg) {
   dbg->dwarf = dwarf::dwarf(dwarf::elf::create_loader(dbg->elf));
 }
 
-// TODO: Add support of inline and member functions
 dwarf::die debugger_get_function_from_pc(Debug_Info *dbg, u64 pc) {
   for (auto &cu : dbg->dwarf.compilation_units()) {
     if (dwarf::die_pc_range(cu.root()).contains(pc)) {
@@ -526,7 +525,7 @@ dwarf::line_table::iterator debugger_get_line_entry_from_pc(Debug_Info *dbg, u64
   for (auto &cu : dbg->dwarf.compilation_units()) {
     if (dwarf::die_pc_range(cu.root()).contains(pc)) {
       auto &lt = cu.get_line_table();
-      auto it = lt.find_address(pc);
+      auto it = lt.find_address(pc); // @Bug: libelfin unable to find end line of template function for some reason
       if (it == lt.end()) {
         throw std::out_of_range("Cannot find line entry"); // TODO: Get rid of exception throws
       } else {
@@ -765,26 +764,42 @@ void debugger_step_over(Debug_Info *dbg) {
   debugger_continue_execution(dbg);
 }
 
-inline void output_frame(dwarf::die function) {
+inline void get_function_name(dwarf::die function_die, std::string &function_name) {
+  if (function_die.has(dwarf::DW_AT::name))  function_die[dwarf::DW_AT::name].as_string(function_name);
+  else if (function_die.has(dwarf::DW_AT::specification)) {
+    auto member_function_die = function_die[dwarf::DW_AT::specification].as_reference();
+    member_function_die[dwarf::DW_AT::name].as_string(function_name);
+  }
+}
+
+inline void output_frame(dwarf::die function, bool new_backtrace = false) {
   static u32 frame_number = 0;
-  printf("frame #%d: 0x%lx %s\n", frame_number++, dwarf::at_low_pc(function), dwarf::at_name(function).c_str());
+  if (new_backtrace)  frame_number = 0;
+
+  std::string function_name;
+  get_function_name(function, function_name);
+
+  printf("frame #%d: 0x%lx %s\n", frame_number++, dwarf::at_low_pc(function), function_name.c_str());
 }
 
 // :NotLib
-// TODO: Support for member function
 void debugger_print_backtrace(Debug_Info *dbg) {
   auto func = debugger_get_function_from_pc(dbg, debugger_offset_load_address(dbg, debugger_get_pc(dbg)));
-  output_frame(func);
+  output_frame(func, true);
 
   auto frame_pointer = debugger_read_register(dbg, Register::rbp);
   auto return_address = debugger_read_memory(dbg, frame_pointer + 8);
 
   auto iter = func;
-  while (strncmp(dwarf::at_name(iter).c_str(), "main", 5) != 0) {
+  std::string iter_function_name;
+  get_function_name(iter, iter_function_name);
+  while (strncmp(iter_function_name.c_str(), "main", 5) != 0) {
     iter = debugger_get_function_from_pc(dbg, debugger_offset_load_address(dbg, return_address));
     output_frame(iter);
     frame_pointer = debugger_read_memory(dbg, frame_pointer);
     return_address = debugger_read_memory(dbg, frame_pointer + 8);
+
+    get_function_name(iter, iter_function_name);
   }
 }
 
@@ -950,7 +965,7 @@ bool handle_command(Debug_Info *dbg, char * line) {
       auto syms = debugger_lookup_symbol(dbg, args[1].start);
       defer {
         For (syms) {
-          if (it.name)  {
+          if (it.name) {
             free(it.name);
           }
         }
