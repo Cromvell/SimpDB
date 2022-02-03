@@ -22,18 +22,19 @@
 #include "Array.h"
 #include "Hash_Table.h"
 
-#pragma GCC diagnostic ignored "-Wwrite-strings"
+#include "declaration_parser.h"
+
+// #pragma GCC diagnostic ignored "-Wwrite-strings"
 
 // Plan: Write out debugging lib, which can be used in ImGui graphical program
-// * Support for inline, member function, as well for overloads
-// * Add conditional breakpoints
-// * Figure out how to deal with multiple breakpoints on one line. Currnetly setting up new breakpoint leak an old one.
+// * Implement iteration for hash table
+// * Lib API
 // * Remove exception throws
 // * Handle process termination
-// * Handle address randomization
 // * Attach to a process
+// * Add conditional breakpoints
+// * Figure out how to deal with multiple breakpoints on one line. Currnetly setting up new breakpoint leak an old one.
 // * process_vm_readv and process_vm_writev
-// * Lib API
 // * ImGUI
 
 struct Argument_String {
@@ -217,27 +218,97 @@ void disable_breakpoint(Breakpoint *breakpoint) {
   breakpoint->enabled = false;
 }
 
-// TODO: Handle inline, member functions as well as function overloads
-Breakpoint *debugger_set_breakpoint_at_function(Debug_Info *dbg, char *function_name) {
-  auto function_name_len = strlen(function_name);
+bool match_parameter_type(dwarf::die type_die, Function_Argument *parameter, u32 pointer_level = 0) {
+  switch (type_die.tag) {
+  case dwarf::DW_TAG::base_type:
+    if (type_die.has(dwarf::DW_AT::name)) {
+      std::string type_name;
+      type_die[dwarf::DW_AT::name].as_string(type_name);
+      if (parameter->pointer_level == pointer_level) {
+        return strncmp(type_name.c_str(), parameter->type_name, parameter->type_name_length) == 0;
+      } else {
+        return false;
+      }
+    }
+    break;
+  case dwarf::DW_TAG::const_type:
+    // TODO: Handle const type and (?)reference
+    return match_parameter_type(dwarf::at_type(type_die), parameter, pointer_level);
+  case dwarf::DW_TAG::pointer_type:
+    return match_parameter_type(dwarf::at_type(type_die), parameter, pointer_level + 1);
+  }
+
+  return false;
+}
+
+bool match_function_declaration(dwarf::die function_die, Function_Declaration *declaration) {
+  if (function_die.tag != dwarf::DW_TAG::subprogram)  return false;
+
+  std::string die_function_name;
+  if (function_die.has(dwarf::DW_AT::name)) {
+    function_die[dwarf::DW_AT::name].as_string(die_function_name);
+  } else if (function_die.has(dwarf::DW_AT::specification)) {
+    auto member_function_die = at_specification(function_die);
+    if (member_function_die.has(dwarf::DW_AT::name)) {
+      member_function_die[dwarf::DW_AT::name].as_string(die_function_name);
+    } else {
+      return false;
+    }
+  } else {
+    return false;
+  }
+
+  if (strncmp(die_function_name.c_str(), declaration->function_name, declaration->name_length) == 0) {
+    if (declaration->arguments.count <= 0) {
+      u32 parameter_count = 0;
+      for (const auto &child : function_die) {
+        if (child.tag != dwarf::DW_TAG::formal_parameter)  continue;
+        parameter_count++;
+      }
+
+      // Check if die of the function also have no formal parameters
+      if (parameter_count == 0)  return true;
+      else  return false;
+    } else {
+      u32 parameter_index = 0;
+      for (const auto &child : function_die) {
+        if (child.tag != dwarf::DW_TAG::formal_parameter)  continue;
+        if (parameter_index >= declaration->arguments.count)  break;
+
+        auto &formal_parameter = child;
+        auto type = dwarf::at_type(formal_parameter);
+        if (!match_parameter_type(type, &(declaration->arguments[parameter_index]))) {
+          break;
+        }
+
+        parameter_index++;
+      }
+
+      if (parameter_index == declaration->arguments.count) {
+        // If we got to this point, all argument types were positively matched
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+Breakpoint *debugger_set_breakpoint_at_function(Debug_Info *dbg, char *function_declaration_string) {
+  auto function_declaration_len = strlen(function_declaration_string);
+
+  auto declaration = parse_function_declaration(function_declaration_string, function_declaration_len);
+  defer { deinit(&declaration); };
+
+  if (declaration.function_name == nullptr) {
+    std::cerr << "ERROR: Cannot parse function declaration" << std::endl;
+    return nullptr;
+  }
+
   for (const auto &cu : dbg->dwarf.compilation_units()) {
     for (const auto &die : cu.root()) {
       if (die.tag == dwarf::DW_TAG::subprogram) {
-        std::string die_function_name;
-        if (die.has(dwarf::DW_AT::name)) {
-          die[dwarf::DW_AT::name].as_string(die_function_name);
-        } else if (die.has(dwarf::DW_AT::specification)) {
-          auto member_function_die = at_specification(die);
-          if (member_function_die.has(dwarf::DW_AT::name)) {
-            member_function_die[dwarf::DW_AT::name].as_string(die_function_name);
-          } else {
-            continue;
-          }
-        } else {
-          continue;
-        }
-
-        if (strncmp(die_function_name.c_str(), function_name, function_name_len) == 0) {
+        if (match_function_declaration(die, &declaration)) {
           if (die.has(dwarf::DW_AT::low_pc)) {
             auto low_pc = at_low_pc(die);
             auto entry = debugger_get_line_entry_from_pc(dbg, low_pc);
@@ -278,11 +349,11 @@ enum Symbol_Type : u8 {
 
 char *to_string(Symbol_Type type) {
   switch (type) {
-  case Symbol_Type::notype:   return "notype";
-  case Symbol_Type::object:   return "object";
-  case Symbol_Type::func:     return "func";
-  case Symbol_Type::section:  return "section";
-  case Symbol_Type::file:     return "file";
+  case Symbol_Type::notype:   return (char *)"notype";
+  case Symbol_Type::object:   return (char *)"object";
+  case Symbol_Type::func:     return (char *)"func";
+  case Symbol_Type::section:  return (char *)"section";
+  case Symbol_Type::file:     return (char *)"file";
   }
   assert(false);
 }
@@ -365,33 +436,33 @@ struct Register_Descriptor {
 };
 
 const Register_Descriptor global_register_descriptors[registers_count] = {
-  { Register::r15, 15, "r15" },
-  { Register::r14, 14, "r14" },
-  { Register::r13, 13, "r13" },
-  { Register::r12, 12, "r12" },
-  { Register::rbp, 6, "rbp" },
-  { Register::rbx, 3, "rbx" },
-  { Register::r11, 11, "r11" },
-  { Register::r10, 10, "r10" },
-  { Register::r9, 9, "r9" },
-  { Register::r8, 8, "r8" },
-  { Register::rax, 0, "rax" },
-  { Register::rcx, 2, "rcx" },
-  { Register::rdx, 1, "rdx" },
-  { Register::rsi, 4, "rsi" },
-  { Register::rdi, 5, "rdi" },
-  { Register::orig_rax, -1, "orig_rax" },
-  { Register::rip, -1, "rip" },
-  { Register::cs, 51, "cs" },
-  { Register::eflags, 49, "eflags" },
-  { Register::rsp, 7, "rsp" },
-  { Register::ss, 52, "ss" },
-  { Register::fs_base, 58, "fs_base" },
-  { Register::gs_base, 59, "gs_base" },
-  { Register::ds, 53, "ds" },
-  { Register::es, 50, "es" },
-  { Register::fs, 54, "fs" },
-  { Register::gs, 55, "gs" },
+  { Register::r15,      15, (char *)"r15"      },
+  { Register::r14,      14, (char *)"r14"      },
+  { Register::r13,      13, (char *)"r13"      },
+  { Register::r12,      12, (char *)"r12"      },
+  { Register::rbp,       6, (char *)"rbp"      },
+  { Register::rbx,       3, (char *)"rbx"      },
+  { Register::r11,      11, (char *)"r11"      },
+  { Register::r10,      10, (char *)"r10"      },
+  { Register::r9,        9, (char *)"r9"       },
+  { Register::r8,        8, (char *)"r8"       },
+  { Register::rax,       0, (char *)"rax"      },
+  { Register::rcx,       2, (char *)"rcx"      },
+  { Register::rdx,       1, (char *)"rdx"      },
+  { Register::rsi,       4, (char *)"rsi"      },
+  { Register::rdi,       5, (char *)"rdi"      },
+  { Register::orig_rax, -1, (char *)"orig_rax" },
+  { Register::rip,      -1, (char *)"rip"      },
+  { Register::cs,       51, (char *)"cs"       },
+  { Register::eflags,   49, (char *)"eflags"   },
+  { Register::rsp,       7, (char *)"rsp"      },
+  { Register::ss,       52, (char *)"ss"       },
+  { Register::fs_base,  58, (char *)"fs_base"  },
+  { Register::gs_base,  59, (char *)"gs_base"  },
+  { Register::ds,       53, (char *)"ds"       },
+  { Register::es,       50, (char *)"es"       },
+  { Register::fs,       54, (char *)"fs"       },
+  { Register::gs,       55, (char *)"gs"       },
 };
 
 u64 debugger_read_register(pid_t pid, Register r) {
