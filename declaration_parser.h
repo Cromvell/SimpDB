@@ -3,12 +3,14 @@
 #include "Array.h"
 
 // TODO: Add support for template type parameters
-// TODO: Add support for keywords, like const
+// TODO: (?)Add support for reference parameters
 
 struct Function_Argument {
   char *type_name = nullptr;
   s32 type_name_length = -1;
   u32 pointer_level = 0;
+  bool is_const = false;
+  bool is_compound_type = false;
 };
 
 struct Function_Declaration {
@@ -33,6 +35,7 @@ enum Declaration_Token_Kind : u8 {
   STAR               = 0x10,
   OPENING_PARENTHESE = 0x20,
   CLOSING_PARENTHESE = 0x40,
+  CONST_SPECIFIER    = 0x80,
 };
 
 struct Declaration_Token {
@@ -61,7 +64,11 @@ Declaration_Token get_next_token(char *search_start) {
 
     while (isalnum(*pointer) || *pointer == '_')  pointer++;
 
-    return (Declaration_Token){.kind=TYPE, .name=(char *)search_start, .length=static_cast <s32>(pointer - search_start)};
+    if (strncmp(search_start, "const", 5) == 0) {
+      return (Declaration_Token){.kind=CONST_SPECIFIER, .name=(char *)search_start, .length=static_cast <s32>(pointer - search_start)};
+    } else {
+      return (Declaration_Token){.kind=TYPE, .name=(char *)search_start, .length=static_cast <s32>(pointer - search_start)};
+    }
   }
   }
 }
@@ -82,22 +89,29 @@ Function_Declaration parse_function_declaration(char *string_start, u32 string_l
   if ((result.name_length + 1) >= string_length) {
     return result;
   } else {
-    auto token = get_next_token(token_pointer);
-    if (token.kind != Declaration_Token_Kind::OPENING_PARENTHESE)  return result;
+    auto next_token = get_next_token(token_pointer);
+    if (next_token.kind != Declaration_Token_Kind::OPENING_PARENTHESE)  return result;
 
-    auto previous_token = token;
-    token_pointer = token_pointer + previous_token.length;
+    auto token = next_token;
+    token_pointer = token_pointer + token.length;
 
     while (isspace(*token_pointer)) token_pointer++; // Skip spaces
 
-    token = get_next_token(token_pointer);
+    next_token = get_next_token(token_pointer);
 
     u8 stop_flags = (Declaration_Token_Kind::CLOSING_PARENTHESE | Declaration_Token_Kind::EOS | Declaration_Token_Kind::UNKNOWN_TOKEN);
-    while (!(token.kind & stop_flags)) {
-      switch (token.kind) {
+    while (!(next_token.kind & stop_flags)) {
+      switch (next_token.kind) {
       case Declaration_Token_Kind::TYPE:
-        if (previous_token.kind & (Declaration_Token_Kind::COMMA_SEPARATOR | Declaration_Token_Kind::OPENING_PARENTHESE)) {
-          result.arguments.add((Function_Argument){.type_name=token.name, .type_name_length=token.length});
+        if (token.kind & (COMMA_SEPARATOR | OPENING_PARENTHESE | CONST_SPECIFIER | TYPE)) {
+          if (token.kind == CONST_SPECIFIER) {
+            result.arguments.add((Function_Argument){.type_name=next_token.name, .type_name_length=next_token.length, .is_const=true});
+          } else if (token.kind == TYPE) {
+            result.arguments.back().type_name_length = static_cast <s32>(next_token.name + next_token.length - result.arguments.back().type_name);
+            result.arguments.back().is_compound_type = true;
+          } else {
+            result.arguments.add((Function_Argument){.type_name=next_token.name, .type_name_length=next_token.length});
+          }
         } else {
           return (Function_Declaration){};
         }
@@ -106,9 +120,9 @@ Function_Declaration parse_function_declaration(char *string_start, u32 string_l
       case Declaration_Token_Kind::STAR:
         if (result.arguments.count <= 0)  return (Function_Declaration){};
 
-        if (previous_token.kind == Declaration_Token_Kind::TYPE) {
+        if (token.kind == Declaration_Token_Kind::TYPE) {
           result.arguments.back().pointer_level = 1;
-        } else if (previous_token.kind == Declaration_Token_Kind::STAR && result.arguments.back().pointer_level > 0) {
+        } else if (token.kind == Declaration_Token_Kind::STAR && result.arguments.back().pointer_level > 0) {
           result.arguments.back().pointer_level++;
         } else {
           return (Function_Declaration){};
@@ -116,7 +130,7 @@ Function_Declaration parse_function_declaration(char *string_start, u32 string_l
         break;
 
       case Declaration_Token_Kind::COMMA_SEPARATOR:
-        if (previous_token.kind & (Declaration_Token_Kind::TYPE | Declaration_Token_Kind::STAR)) {
+        if (token.kind & (Declaration_Token_Kind::TYPE | Declaration_Token_Kind::STAR)) {
         } else {
           return (Function_Declaration){};
         }
@@ -124,25 +138,32 @@ Function_Declaration parse_function_declaration(char *string_start, u32 string_l
 
       case Declaration_Token_Kind::OPENING_PARENTHESE:
         return (Function_Declaration){};
+
+      case Declaration_Token_Kind::CONST_SPECIFIER:
+        if (token.kind & (Declaration_Token_Kind::OPENING_PARENTHESE | Declaration_Token_Kind::COMMA_SEPARATOR)) {
+        } else {
+          return (Function_Declaration){};
+        }
+        break;
       }
       
-      previous_token = token;
-      token_pointer = token_pointer + previous_token.length;
+      token = next_token;
+      token_pointer = token_pointer + token.length;
 
       while (isspace(*token_pointer)) token_pointer++; // Skip spaces
       
-      token = get_next_token(token_pointer);
+      next_token = get_next_token(token_pointer);
     }
 
-    if (token.kind == Declaration_Token_Kind::UNKNOWN_TOKEN)  return (Function_Declaration){};
-    if (token.kind == Declaration_Token_Kind::CLOSING_PARENTHESE) {
-      if (previous_token.kind & (Declaration_Token_Kind::TYPE | Declaration_Token_Kind::STAR | Declaration_Token_Kind::OPENING_PARENTHESE)) {
+    if (next_token.kind == Declaration_Token_Kind::UNKNOWN_TOKEN)  return (Function_Declaration){};
+    if (next_token.kind == Declaration_Token_Kind::CLOSING_PARENTHESE) {
+      if (token.kind & (Declaration_Token_Kind::TYPE | Declaration_Token_Kind::STAR | Declaration_Token_Kind::OPENING_PARENTHESE)) {
       } else {
         return (Function_Declaration){};
       }
     }
-    if (token.kind == Declaration_Token_Kind::EOS) {
-      if (previous_token.kind == Declaration_Token_Kind::CLOSING_PARENTHESE) {
+    if (next_token.kind == Declaration_Token_Kind::EOS) {
+      if (token.kind == Declaration_Token_Kind::CLOSING_PARENTHESE) {
       } else {
         return (Function_Declaration){};
       }

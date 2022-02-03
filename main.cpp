@@ -218,22 +218,49 @@ void disable_breakpoint(Breakpoint *breakpoint) {
   breakpoint->enabled = false;
 }
 
-bool match_parameter_type(dwarf::die type_die, Function_Argument *parameter, u32 pointer_level = 0) {
+bool match_parameter_type(dwarf::die type_die, Function_Argument *parameter, u32 pointer_level = 0, bool is_const = false) {
   switch (type_die.tag) {
   case dwarf::DW_TAG::base_type:
     if (type_die.has(dwarf::DW_AT::name)) {
       std::string type_name;
       type_die[dwarf::DW_AT::name].as_string(type_name);
-      if (parameter->pointer_level == pointer_level) {
-        return strncmp(type_name.c_str(), parameter->type_name, parameter->type_name_length) == 0;
+      if (parameter->pointer_level == pointer_level && parameter->is_const == is_const) {
+        if (!parameter->is_compound_type) {
+          return strncmp(type_name.c_str(), parameter->type_name, parameter->type_name_length) == 0;
+        } else {
+          char * type_part_start_pointer = parameter->type_name;
+          char * type_part_end_pointer = parameter->type_name;
+          auto type_part_offset = 0;
+          auto die_type_part_offset = 0;
+
+          while (type_part_offset < parameter->type_name_length) {
+            while (isalnum(*type_part_end_pointer) || *type_part_end_pointer == '_')  type_part_end_pointer++;
+
+            type_part_offset = (type_part_start_pointer - parameter->type_name);
+            auto type_part_length = (type_part_end_pointer - type_part_start_pointer);
+            auto names_match = (strncmp(type_name.c_str() + die_type_part_offset, type_part_start_pointer, type_part_length) == 0);
+
+            if (!names_match)  return false;
+
+            while (isspace(*type_part_end_pointer))  type_part_end_pointer++;
+
+            type_part_start_pointer = type_part_end_pointer;
+            die_type_part_offset += type_part_length + 1; // +1 for space between keywords
+          }
+
+          // Check if all parts of compound type were present in parsed parameter type
+          if (type_part_offset >= type_name.size())  return true;
+          else  return false;
+        }
       } else {
         return false;
       }
     }
     break;
+
   case dwarf::DW_TAG::const_type:
-    // TODO: Handle const type and (?)reference
-    return match_parameter_type(dwarf::at_type(type_die), parameter, pointer_level);
+    return match_parameter_type(dwarf::at_type(type_die), parameter, pointer_level, true);
+
   case dwarf::DW_TAG::pointer_type:
     return match_parameter_type(dwarf::at_type(type_die), parameter, pointer_level + 1);
   }

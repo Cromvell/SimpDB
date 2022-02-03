@@ -105,6 +105,14 @@ void overloaded_func(int foo){
   printf("Lol: %d\n", s);
 }
 
+void overloaded_func(long unsigned int foo){
+  int n = 0;
+
+  n++;
+  auto s = n + 1;
+  printf("long unsigned int Lol: %d\n", s);
+}
+
 void overloaded_func(char * foo){
   printf("Lol: %s\n", foo);
 }
@@ -129,6 +137,9 @@ int main() {
     overloaded_func((char *)"Wat?");
     overloaded_func(ch);
     overloaded_func(42);
+
+    long unsigned int lui = 100000000000000;
+    overloaded_func(lui);
 
     int value = 69;
     int *a = &value, **b = &a, ***c = &b, ****d = &c, *****e = &d, ******f = &e;
