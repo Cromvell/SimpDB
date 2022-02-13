@@ -1,4 +1,21 @@
-# Build debugee
-g++ -g -std=c++14 -O0 -gdwarf-2 -fno-omit-frame-pointer debugee.cpp -o debugee
+#!/bin/bash
 
-g++ -g -o mydbg main.cpp lib/linenoise.a -I/usr/local/include/libelfin -L/usr/local/lib -ldwarf++ -lelf++
+LIB_ARGS="-I/usr/local/include/libelfin -L/usr/local/lib -ldwarf++ -lelf++"
+
+if [ "$#" -ge 1 ] ; then
+  if [ $1 == "-lib" ] ; then
+    echo "Building library"
+    # Mode 1: compile debugger as a library
+    g++ -g -c debugger.cpp $LIB_ARGS -o library_debugger.o
+    ar rcs library_debugger.a library_debugger.o
+    rm library_debugger.o
+    # And optionally link it with another program
+    #g++ -g test.cpp library_debugger.a $LIB_ARGS -o test
+  else
+    echo "ERROR: Unknown argument. Building nothing"
+  fi
+else
+  echo "Building stand-alone program"
+  # Mode 2: compile debugger into stand-alone program
+  g++ -g test.cpp $LIB_ARGS -o test
+fi
