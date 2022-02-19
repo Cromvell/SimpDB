@@ -29,7 +29,13 @@ s32 main(s32 argc, char *argv[]) {
 
   dbg::print_breakpoints(d);
 
-  dbg::continue_execution(d);
+  auto source_files = dbg::get_sources(d);
+  defer { deinit(source_files); };
+  printf("\nSource file list:\n");
+  dbg::print_sources(source_files);
+  printf("\n");
+
+  dbg::start(d);
 
   printf("START OF CONTEXT PRINT\n");
   dbg::print_current_source_context(d, 4);
@@ -102,6 +108,15 @@ s32 main(s32 argc, char *argv[]) {
     printf("0x%lx (%s): %s\n", it.address, to_string(it.type), it.name);
   }
   printf("\n");
+
+  // dbg::continue_execution(d);
+  // dbg::continue_execution(d);
+  // dbg::continue_execution(d);
+  // dbg::continue_execution(d);
+  // dbg::continue_execution(d);
+  // dbg::continue_execution(d);
+
+  dbg::stop(d);
 
   printf("Debugging session finished!\n");
 

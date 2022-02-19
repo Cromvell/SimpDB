@@ -24,6 +24,14 @@
 #include "debugger.h"
 #include "declaration_parser.h"
 
+// Applied in the context of dbg pointer
+#define dbg_fail(message) {\
+    if (dbg->verbose)  fprintf(stderr, "Error: %s\n", message);  \
+    dbg->last_command_status = Command_Status::FAIL; \
+  }
+#define dbg_success() (dbg->last_command_status = Command_Status::SUCCESS)
+
+// Debugger internal API
 DBG_NAMESPACE_BEGIN
 
 u64 offset_load_address(Debugger *dbg, u64 addr);

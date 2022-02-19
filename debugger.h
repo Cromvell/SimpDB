@@ -26,19 +26,18 @@ struct Source_Context;
 struct Symbol;
 struct Frame;
 struct Variable;
+struct Source_File;
 
-// TODO: Reexamine debugging session flow
 enum class Debugger_State : u8 {
   NOT_STARTED,
   ATTACHED,
   RUNNING,
-  FINISHED
+  FINISHED // TODO: Handle finished state correctly
 };
 
-// TODO: Make all functions set this status
 enum class Command_Status : u8 {
   NO_STATUS,
-  SUCCEDED,
+  SUCCESS,
   FAIL,
 };
 
@@ -48,7 +47,7 @@ struct Debugger {
   char * argument_string = nullptr;
 
   Debugger_State state = Debugger_State::NOT_STARTED;
-  Command_Status last_operation_state = Command_Status::NO_STATUS;
+  Command_Status last_command_status = Command_Status::NO_STATUS;
 
   Array<Breakpoint *> breakpoints;
   Hash_Table<u64, Breakpoint *> breakpoint_map;
@@ -57,6 +56,7 @@ struct Debugger {
   elf::elf elf;
 
   u64 load_address = 0;
+  bool verbose = false;
 };
 
 void init(Debugger * dbg);
@@ -64,6 +64,9 @@ void deinit(Debugger * dbg);
 
 void debug(Debugger * dbg, const char * executable_path, const char * arguments);
 void attach(Debugger * dbg, u32 pid);
+
+void start(Debugger *dbg);
+void stop(Debugger *dbg);
 
 //
 // Reading and writing
@@ -88,6 +91,15 @@ void write_memory(Debugger * dbg, u64 address, u64 value);
 //
 // Location discovery
 //
+
+struct Source_File {
+  char *file_path = nullptr;
+  char *file_name = nullptr;
+
+  u32 line_count;
+  u64 length;
+};
+
 struct Source_Location {
   char *file_path = nullptr;
   char *file_name = nullptr;
@@ -103,6 +115,11 @@ struct Source_Context {
   u32 current_line;
   u32 end_line;
 };
+
+Array<Source_File> get_sources(Debugger * dbg);
+void deinit(Array<Source_File> source_list); // Source list should be freed after the use
+
+void print_sources(Array<Source_File> sources);
 
 Source_Location get_source_location(Debugger * dbg);
 Source_Context get_source_context(Debugger * dbg, u32 line_count = 3);

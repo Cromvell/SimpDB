@@ -6,33 +6,40 @@
 
 // Plan: Write out debugging lib, which can be used in ImGui graphical program
 // * Lib API
-//   * Set SUCCESS and fail flags
-//   * Introduce debugger states 
-//   * Add a verbose flag for some functions :VerboseFlag
-// * Remove exception throws
+//   * TODO: handle process termination correctly
+//   * Rename debugee to traced_process or something
 // * Add conditional breakpoints
 // * Figure out how to deal with multiple breakpoints on one line. Currently setting up new breakpoint leak an old one.
 // * process_vm_readv and process_vm_writev
-// * ImGUI
+// * Deer ImGUI
+// * logger compatible with both terminal and ImGuI
 
 DBG_NAMESPACE_BEGIN
 
 void init(Debugger * dbg) {
+  // @Note: Not checking debugger state here, as it's not the concern of
+  //        initialization functions. They excluded from the state machine.
   if (dbg) {
     dbg->breakpoints.init();
     dbg->breakpoint_map.init();
 
-    dbg->last_operation_state = dbg::Command_Status::NO_STATUS;
+    dbg->state = Debugger_State::NOT_STARTED;
+    dbg->last_command_status = dbg::Command_Status::NO_STATUS;
   }
 }
 
 void deinit(Debugger * dbg) {
+  // @Note: Not checking for debugger state here, as it's not the concern of
+  //        initialization functions. They excluded from the state machine.
   if (dbg) {
     if (dbg->executable_path)  free(dbg->executable_path);
     if (dbg->argument_string)  free(dbg->argument_string);
 
     dbg->breakpoints.deinit();
     dbg->breakpoint_map.deinit();
+
+    dbg->state = Debugger_State::NOT_STARTED;
+    dbg->last_command_status = dbg::Command_Status::NO_STATUS;
   }
 }
 
@@ -96,6 +103,12 @@ u64 pid_read_register(pid_t pid, Register r) {
 }
 
 u64 read_register(Debugger *dbg, Register r) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return 0;
+  }
+
+  dbg_success();
   return read_register(dbg->debugee_pid, r);
 }
 
@@ -113,7 +126,14 @@ void write_register(pid_t pid, Register r, u64 value) {
 }
 
 void write_register(Debugger *dbg, Register r, u64 value) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return;
+  }
+
   write_register(dbg->debugee_pid, r, value);
+
+  dbg_success();
 }
 
 inline u64 get_pc(Debugger *dbg) {
@@ -150,11 +170,21 @@ u64 read_dwarf_register(Debugger *dbg, u32 register_number) {
 //       Task: rewrite this to process_vm_readv and process_vm_writev (https://man7.org/linux/man-pages/man2/process_vm_readv.2.html)
 //          OR use /proc/<pid>/mem instead ptrace (compare options' performance and portability to other systems)
 u64 read_memory(Debugger *dbg, u64 address) {
-  return ptrace(PTRACE_PEEKDATA, dbg->debugee_pid, address, nullptr);
+  if (dbg->state != Debugger_State::NOT_STARTED) {
+    return ptrace(PTRACE_PEEKDATA, dbg->debugee_pid, address, nullptr);
+
+  } else {
+    dbg_fail("debugged program isn't loaded");
+    return 0;
+  }
 }
 
 void write_memory(Debugger *dbg, u64 address, u64 value) {
-  ptrace(PTRACE_POKEDATA, dbg->debugee_pid, address, value);
+  if (dbg->state != Debugger_State::NOT_STARTED) {
+    ptrace(PTRACE_POKEDATA, dbg->debugee_pid, address, value);
+  } else {
+    dbg_fail("debugged program isn't loaded");
+  }
 }
 
 siginfo_t get_signal_info(Debugger *dbg) {
@@ -182,10 +212,13 @@ void handle_sigtrap(Debugger *dbg, siginfo_t info) {
     set_pc(dbg, get_pc(dbg) - 1);
     auto current_pc = get_pc(dbg);
     printf("Hit breakpoint at adress 0x%lx\n", current_pc);
-    auto offset_pc = offset_load_address(dbg, current_pc);
-    // :VerboseFlag
-    // auto line_entry = get_line_entry_from_pc(dbg, offset_pc);
-    // print_source(dbg, line_entry->file->path.c_str(), line_entry->line);
+    if (dbg->verbose) {
+      try {
+        print_current_source_location(dbg);
+      } catch (std::out_of_range ex) {
+        dbg_fail("couldn't find line corresponded to current PC");
+      }
+    }
     return;
   }
   case TRAP_TRACE: // single stepping trap
@@ -199,7 +232,7 @@ void handle_sigtrap(Debugger *dbg, siginfo_t info) {
   }
 }
 
-void initialize_load_address(Debugger * dbg) {
+s32 initialize_load_address(Debugger * dbg) {
   // If dynamic library was loaded
   if (dbg->elf.get_hdr().type == elf::et::dyn) {
     char proc_map_path[64];
@@ -208,6 +241,11 @@ void initialize_load_address(Debugger * dbg) {
     FILE * fp = fopen(proc_map_path, "r");
     FILE * fp_get_size = fopen(proc_map_path, "r");
     defer { fclose(fp); fclose(fp_get_size); };
+
+    if (!fp || !fp_get_size) {
+      if (dbg->verbose)  printf("Error: cannot open /proc/%d/maps\n", dbg->debugee_pid);
+      return 1;
+    }
 
     u64 start_addr, end_addr;
     auto executable_path_len = strlen(dbg->executable_path);
@@ -226,11 +264,16 @@ void initialize_load_address(Debugger * dbg) {
     }
 
     if (!file_path) {
-      printf("Couldn't find load address of file: %s\n", dbg->executable_path);
+      printf("Error: Couldn't find load address of file: %s\n", dbg->executable_path);
       assert(false);
     }
 
     dbg->load_address = start_addr;
+
+    return 0;
+  } else {
+    if (dbg->verbose)  printf("Error: Expected executable loaded as dynamical library\n");
+    return 2;
   }
 }
 
@@ -239,11 +282,29 @@ void initialize_load_address(Debugger * dbg) {
 //  Debug info processing
 //
 
-void load_debug_info(Debugger *dbg) {
+s32 load_debug_info(Debugger *dbg) {
   auto fd = open(dbg->executable_path, O_RDONLY);
 
-  dbg->elf   = elf::elf(elf::create_mmap_loader(fd));
-  dbg->dwarf = dwarf::dwarf(dwarf::elf::create_loader(dbg->elf));
+  if (!fd) {
+    if (dbg->verbose)  printf("Error: Couldn't load debug info. File %s not exists.\n", dbg->executable_path);
+    return 1;
+  }
+
+  try {
+    dbg->elf = elf::elf(elf::create_mmap_loader(fd));
+  } catch (elf::format_error ex) {
+    if (dbg->verbose)  printf("Error: Couldn't load file ELF info: %s\n", ex.what());
+    return 2;
+  }
+
+  try {
+    dbg->dwarf = dwarf::dwarf(dwarf::elf::create_loader(dbg->elf));
+  } catch (elf::format_error ex) {
+    if (dbg->verbose)  printf("Error: Couldn't load debug info from file: %s\n", ex.what());
+    return 3;
+  }
+
+  return 0;
 }
 
 dwarf::die get_function_from_pc(Debugger *dbg, u64 pc) {
@@ -252,6 +313,7 @@ dwarf::die get_function_from_pc(Debugger *dbg, u64 pc) {
       for (const auto &die : cu.root()) {
         if (die.tag == dwarf::DW_TAG::subprogram) {
           if (die.has(dwarf::DW_AT::low_pc) && dwarf::die_pc_range(die).contains(pc)) {
+            dbg->last_command_status = Command_Status::SUCCESS;
             return die;
           }
         }
@@ -259,7 +321,8 @@ dwarf::die get_function_from_pc(Debugger *dbg, u64 pc) {
     }
   }
 
-  throw std::out_of_range("Cannot find function"); // TODO: Get rid of exception throws
+  dbg->last_command_status = Command_Status::FAIL;
+  return dwarf::die();
 }
 
 dwarf::line_table::iterator get_line_entry_from_pc(Debugger *dbg, u64 pc) {
@@ -268,16 +331,20 @@ dwarf::line_table::iterator get_line_entry_from_pc(Debugger *dbg, u64 pc) {
       auto &lt = cu.get_line_table();
       auto it = lt.find_address(pc); // @Bug: libelfin unable to find end line of template function for some reason
       if (it == lt.end()) {
-        throw std::out_of_range("Cannot find line entry"); // TODO: Get rid of exception throws
+        dbg->last_command_status = Command_Status::FAIL;
+        return dwarf::line_table::iterator(nullptr, 0);
       } else {
+        dbg->last_command_status = Command_Status::SUCCESS;
         return it;
       }
     }
   }
 
-  throw std::out_of_range("Cannot find line entry"); // TODO: Get rid of exception throws
+  dbg->last_command_status = Command_Status::FAIL;
+  return dwarf::line_table::iterator(nullptr, 0);
 }
 
+// TODO: handle process termination correctly
 void wait_for_signal(Debugger * dbg) {
   s32 wait_status;
   s32 options = 0;
@@ -298,9 +365,13 @@ void wait_for_signal(Debugger * dbg) {
   }
 }
 
-
 // TODO: Handle arguments
 void debug(Debugger * dbg, const char * executable_path, const char * arguments) {
+  if (dbg->state != Debugger_State::NOT_STARTED) {
+    dbg_fail("could start debugging session only of NOT_STARTED process");
+    return;
+  }
+
   auto pid = fork();
 
   if (pid == 0) {
@@ -316,20 +387,35 @@ void debug(Debugger * dbg, const char * executable_path, const char * arguments)
     // sprintf(exe_link, "/proc/%d/exe", dbg->debugee_pid);
     // dbg->executable_path = realpath(exe_link, nullptr);
 
-    // @Note: but this one pointing to original file
+    // @Note: but this one pointing to the original file
     dbg->executable_path = realpath(executable_path, nullptr);
 
     if (arguments) {
       dbg->argument_string = strdup(arguments);
     }
 
-    load_debug_info(dbg);
+    s32 fail = load_debug_info(dbg);
+    if (fail) {
+      dbg->last_command_status = Command_Status::FAIL;
+      return;
+    }
+
     wait_for_signal(dbg);
-    initialize_load_address(dbg);
+
+    fail = initialize_load_address(dbg);
+    if (!fail) {
+      dbg->state = Debugger_State::ATTACHED;
+      dbg_success();
+    }
   }
 }
 
 void attach(Debugger * dbg, u32 pid) {
+  if (dbg->state != Debugger_State::NOT_STARTED) {
+    dbg_fail("could start debugging session only of NOT_STARTED process");
+    return;
+  }
+
   dbg->debugee_pid = pid;
   ptrace(PTRACE_ATTACH, pid, nullptr, nullptr);
 
@@ -338,9 +424,44 @@ void attach(Debugger * dbg, u32 pid) {
 
   dbg->executable_path = realpath(exe_link, nullptr);
 
-  load_debug_info(dbg);
+  s32 fail = load_debug_info(dbg);
+  if (!fail) {
+    dbg->last_command_status = Command_Status::FAIL;
+    return;
+  }
+
   wait_for_signal(dbg);
-  initialize_load_address(dbg);
+
+  fail = initialize_load_address(dbg);
+  if (fail) {
+    dbg->state = Debugger_State::ATTACHED;
+    dbg_success();
+  }
+}
+
+void start(Debugger *dbg) {
+  if (dbg->state == Debugger_State::ATTACHED) {
+    dbg->state = Debugger_State::RUNNING;
+
+    // Continuing execution after changin state to RUNNING
+    continue_execution(dbg);
+
+    // @Note: Not setting last_command_status as continue_execution do this
+  } else {
+    dbg_fail("could start debugger only in ATTACHED state");
+  }
+}
+
+void stop(Debugger *dbg) {
+  if (dbg->state == Debugger_State::RUNNING) {
+    dbg->state = Debugger_State::NOT_STARTED;
+
+    // TODO: Handle forked child process and attached situation differentely
+
+    dbg_success();
+  } else {
+    dbg_fail("could stop debugger only in RUNNING state");
+  }
 }
 
 inline char * extract_file_name_from_path(char *file_path) {
@@ -349,21 +470,102 @@ inline char * extract_file_name_from_path(char *file_path) {
   return file_name;
 }
 
+inline u32 count_lines_in_file(char *file_path) {
+  auto file = fopen(file_path, "r");
+  defer { fclose(file); };
+
+  char c = 0;
+  u32 line_count = 0;
+  while ((c = fgetc(file)) != EOF) {
+    if (c == '\n')  line_count++;
+  }
+
+  return line_count;
+}
+
+Array<Source_File> get_sources(Debugger * dbg) {
+  Array<Source_File> result;
+
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return Array<Source_File>();
+  }
+
+  u32 file_index = 0;
+  while (true) {
+    bool found_file_in_compilation_unit = false;
+    for (auto &cu : dbg->dwarf.compilation_units()) {
+      found_file_in_compilation_unit = false;
+      auto &lt = cu.get_line_table();
+
+      const dwarf::line_table::file *file;
+      try {
+        file = lt.get_file(file_index);
+        found_file_in_compilation_unit = true;
+      } catch (std::out_of_range ex) { continue; }
+
+      auto file_path = const_cast <char *>(file->path.c_str());
+      auto file_name = extract_file_name_from_path(file_path);
+      auto line_count = count_lines_in_file(file_path);
+
+      result.add((Source_File){file_path, file_name, line_count, file->length});
+      file_index++;
+      break;
+    }
+
+    if (!found_file_in_compilation_unit)  break;
+  }
+
+  dbg_success();
+  return result;
+}
+
+void deinit(Array<Source_File> sources) {
+  sources.deinit();
+}
+
+void print_sources(Array<Source_File> sources) {
+  For (sources) {
+    printf("%s (lines=%d, length=%ld):\t%s\n", it.file_name, it.line_count, it.length, it.file_path);
+  }
+}
+
 Source_Location get_source_location(Debugger *dbg) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return (Source_Location){};
+  }
+
   auto current_pc = get_pc(dbg);
   auto offset_pc = offset_load_address(dbg, current_pc);
+
   auto line_entry = get_line_entry_from_pc(dbg, offset_pc);
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("couldn't find line corresponded to current PC");
+    return (Source_Location){};
+  }
   auto file_path = const_cast <char *>(line_entry->file->path.c_str());
 
   auto file_name = extract_file_name_from_path(file_path);
 
+  dbg_success();
   return (Source_Location){file_path, file_name, line_entry->line};
 }
 
 Source_Context get_source_context(Debugger *dbg, u32 line_count) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return (Source_Context){};
+  }
+
   auto current_pc = get_pc(dbg);
   auto offset_pc = offset_load_address(dbg, current_pc);
+
   auto line_entry = get_line_entry_from_pc(dbg, offset_pc);
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("couldn't find line corresponded to current PC");
+    return (Source_Context){};
+  }
 
   auto line = line_entry->line;
 
@@ -374,12 +576,15 @@ Source_Context get_source_context(Debugger *dbg, u32 line_count) {
 
   auto file_name = extract_file_name_from_path(file_path);
 
+  dbg_success();
   return (Source_Context){file_path, file_name, context_start_line, line, context_end_line};
 }
 
 void print_source_location(Source_Location * location) {
   auto fp = fopen(location->file_path, "r");
   defer { fclose(fp); };
+
+  if (!fp)  return;
 
   char c = 0;
   u32 current_line = 1;
@@ -400,6 +605,8 @@ void print_source_location(Source_Location * location) {
 void print_source_context(Source_Context * context) {
   auto fp = fopen(context->file_path, "r");
   defer { fclose(fp); };
+
+  if (!fp)  return;
 
   char c = 0;
   u32 current_line = 1;
@@ -424,18 +631,42 @@ void print_source_context(Source_Context * context) {
 }
 
 void print_current_source_location(Debugger * dbg) {
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return;
+  }
+
   auto location = get_source_location(dbg);
-  print_source_location(&location);
+  if (dbg->last_command_status == Command_Status::SUCCESS) {
+    print_source_location(&location);
+
+    dbg_success();
+  }
 }
 
 void print_current_source_context(Debugger * dbg, u32 line_count) {
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return;
+  }
+
   auto context = get_source_context(dbg, line_count);
-  print_source_context(&context);
+  if (dbg->last_command_status == Command_Status::SUCCESS) {
+    print_source_context(&context);
+
+    dbg_success();
+  }
 }
 
 void step_single_instruction(Debugger *dbg) {
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return;
+  }
+
   ptrace(PTRACE_SINGLESTEP, dbg->debugee_pid, nullptr, nullptr);
   wait_for_signal(dbg);
+  dbg_success();
 }
 
 void step_over_breakpoint(Debugger *dbg) {
@@ -461,20 +692,47 @@ void single_instruction_step_with_breakpoint_check(Debugger *dbg) {
 }
 
 void continue_execution(Debugger *dbg) {
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return;
+  }
+
   step_over_breakpoint(dbg);
   ptrace(PTRACE_CONT, dbg->debugee_pid, nullptr, nullptr);
   wait_for_signal(dbg);
+  dbg_success();
 }
 
 void step_in(Debugger * dbg) {
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return;
+  }
+
   auto line = get_line_entry_from_pc(dbg, get_offset_pc(dbg))->line;
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("couldn't find line corresponded to current PC");
+    return;
+  }
 
   while (get_line_entry_from_pc(dbg, get_offset_pc(dbg))->line == line) {
+    if (dbg->last_command_status == Command_Status::FAIL) {
+      dbg_fail("couldn't find line corresponded to current PC");
+      return;
+    }
+
     single_instruction_step_with_breakpoint_check(dbg);
   }
+
+  dbg_success();
 }
 
 void step_out(Debugger * dbg) {
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return;
+  }
+
   auto base_pointer = read_register(dbg, Register::rbp);
   auto return_address = read_memory(dbg, base_pointer + 8);
 
@@ -492,15 +750,35 @@ void step_out(Debugger * dbg) {
   if (should_remove_breakpoint) {
     remove_breakpoint(dbg, return_breakpoint);
   }
+
+  dbg_success();
 }
 
 void step_over(Debugger * dbg) {
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return;
+  }
+
   auto func = get_function_from_pc(dbg, get_offset_pc(dbg));
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("failed to find current function location");
+    return;
+  }
   auto func_entry = at_low_pc(func);
   auto func_end = at_high_pc(func);
 
   auto line = get_line_entry_from_pc(dbg, func_entry);
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("couldn't find line corresponded to function entry");
+    return;
+  }
+
   auto current_line = get_line_entry_from_pc(dbg, get_offset_pc(dbg));
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("couldn't find line corresponded to current PC");
+    return;
+  }
 
   Array<Breakpoint *> to_delete;
   defer {
@@ -535,6 +813,8 @@ void step_over(Debugger * dbg) {
   }
 
   continue_execution(dbg);
+
+  dbg_success();
 }
 
 
@@ -560,9 +840,18 @@ private:
 };
 
 Array<Variable> get_variables(Debugger *dbg) {
-  auto func = get_function_from_pc(dbg, offset_load_address(dbg, get_pc(dbg)));
-
   Array<Variable> variables;
+
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return Array<Variable>();
+  }
+
+  auto func = get_function_from_pc(dbg, offset_load_address(dbg, get_pc(dbg)));
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("failed to find current function location");
+    return Array<Variable>();
+  }
 
   for (const auto &die : func) {
     if (die.tag == dwarf::DW_TAG::variable) {
@@ -596,6 +885,7 @@ Array<Variable> get_variables(Debugger *dbg) {
     }
   }
 
+  dbg_success();
   return variables;
 }
 
@@ -660,7 +950,17 @@ inline void add_function(Debugger *dbg, Array<Frame> *frames, dwarf::die functio
 Array<Frame> get_stack_trace(Debugger * dbg) {
   Array<Frame> frames;
 
+  if (dbg->state != Debugger_State::RUNNING) {
+    dbg_fail("debugged program isn't running");
+    return Array<Frame>();
+  }
+
   auto func = get_function_from_pc(dbg, offset_load_address(dbg, get_pc(dbg)));
+  if (dbg->last_command_status == Command_Status::FAIL) {
+    dbg_fail("failed to find current function location");
+    return Array<Frame>();
+  }
+
   add_function(dbg, &frames, func);
 
   auto frame_pointer = read_register(dbg, Register::rbp);
@@ -670,6 +970,11 @@ Array<Frame> get_stack_trace(Debugger * dbg) {
   char *iter_function_name = get_function_name(iter);
   while (strncmp(iter_function_name, "main", 5) != 0) {
     iter = get_function_from_pc(dbg, offset_load_address(dbg, return_address));
+    if (dbg->last_command_status == Command_Status::FAIL) {
+      dbg_fail("failed to find function location");
+      frames.deinit();
+      return Array<Frame>();
+    }
     add_function(dbg, &frames, iter);
 
     frame_pointer = read_memory(dbg, frame_pointer);
@@ -677,6 +982,7 @@ Array<Frame> get_stack_trace(Debugger * dbg) {
     iter_function_name = get_function_name(iter);
   }
 
+  dbg_success();
   return frames;
 }
 
@@ -728,6 +1034,11 @@ Symbol_Type to_symbol_type(elf::stt symbol) {
 Array<Symbol> lookup_symbol(Debugger *dbg, const char *c_name) {
   Array<Symbol> syms;
 
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return Array<Symbol>();
+  }
+
   auto name = const_cast <char *>(c_name);
 
   auto name_len = strlen(name);
@@ -765,6 +1076,7 @@ Array<Symbol> lookup_symbol(Debugger *dbg, const char *c_name) {
     }
   }
 
+  dbg_success();
   return syms;
 }
 

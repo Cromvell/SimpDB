@@ -1,7 +1,15 @@
 DBG_NAMESPACE_BEGIN
 
 void enable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
-  if (breakpoint->enabled)  return;
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return;
+  }
+
+  if (breakpoint->enabled) {
+    dbg_fail("breakpoint already enabled");
+    return;
+  }
 
   auto instruction = read_memory(dbg, breakpoint->address);
 
@@ -12,10 +20,20 @@ void enable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
   write_memory(dbg, breakpoint->address, injected_int3);
 
   breakpoint->enabled = true;
+
+  dbg_success();
 }
 
 void disable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
-  if (!breakpoint->enabled)  return;
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return;
+  }
+
+  if (!breakpoint->enabled) {
+    dbg_fail("breakpoint already disabled");
+    return;
+  }
 
   auto instruction = read_memory(dbg, breakpoint->address);
 
@@ -24,6 +42,8 @@ void disable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
   write_memory(dbg, breakpoint->address, restored_instruction);
 
   breakpoint->enabled = false;
+
+  dbg_success();
 }
 
 /////////////////////////////////////
@@ -32,6 +52,11 @@ void disable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
 //
 
 Breakpoint *set_breakpoint(Debugger *dbg, u64 address) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return nullptr;
+  }
+
   Breakpoint *breakpoint = static_cast<Breakpoint *> (malloc(sizeof(Breakpoint))); 
   breakpoint->enabled = false;
   breakpoint->address = address;
@@ -41,11 +66,20 @@ Breakpoint *set_breakpoint(Debugger *dbg, u64 address) {
 
   enable_breakpoint(dbg, breakpoint);
 
+  dbg_success();
   return breakpoint;
 }
 
 void remove_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
-  if (!breakpoint)  return;
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return;
+  }
+
+  if (!breakpoint) {
+    dbg_fail("given breakpoint pointer was deinitialized and resetted to null");
+    return;
+  }
 
   if (breakpoint->enabled) {
     disable_breakpoint(dbg, breakpoint);
@@ -54,37 +88,45 @@ void remove_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
   dbg->breakpoint_map.remove(breakpoint->address);
 
   auto breakpoint_index = dbg->breakpoints.find_index(breakpoint);
-  assert(breakpoint_index != -1);
+  if (breakpoint_index == -1) {
+    dbg_fail("couldn't find breakpoint");
+    return;
+  }
+
   dbg->breakpoints.remove_unordered(breakpoint_index);
 
   free(breakpoint);
+  dbg_success();
 }
 
 
 void remove_breakpoint(Debugger *dbg, u64 address) {
-  Breakpoint **res = dbg->breakpoint_map[address];
-  if (res) {
-    auto breakpoint = *res;
-    if (!breakpoint)  {
-      dbg->last_operation_state = Command_Status::FAIL;
-      printf("Found breakpint pointer was deinitialized and resetted to null\n");
-      return;
-    }
-
-    if (breakpoint->enabled)  disable_breakpoint(dbg, breakpoint);
-    dbg->breakpoint_map.remove(address);
-
-    auto breakpoint_index = dbg->breakpoints.find_index(breakpoint);
-    assert(breakpoint_index != -1);
-    dbg->breakpoints.remove_unordered(breakpoint_index);
-
-    free(breakpoint);
-
-    dbg->last_operation_state = Command_Status::SUCCEDED;
-  } else {
-    dbg->last_operation_state = Command_Status::FAIL;
-    printf("Breakpoint wan't found\n");
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return;
   }
+
+  Breakpoint **res = dbg->breakpoint_map[address];
+  if (!res) {
+    dbg_fail("breakpoint with given address wasn't found");
+    return;
+  }
+
+  auto breakpoint = *res;
+  if (!breakpoint)  {
+    dbg_fail("found breakpoint pointer was deinitialized and resetted to null");
+    return;
+  }
+
+  if (breakpoint->enabled)  disable_breakpoint(dbg, breakpoint);
+  dbg->breakpoint_map.remove(address);
+
+  auto breakpoint_index = dbg->breakpoints.find_index(breakpoint);
+  assert(breakpoint_index != -1);
+  dbg->breakpoints.remove_unordered(breakpoint_index);
+
+  free(breakpoint);
+  dbg_success();
 }
 
 
@@ -197,6 +239,11 @@ bool match_function_declaration(dwarf::die function_die, Function_Declaration *d
 }
 
 Breakpoint *set_breakpoint(Debugger *dbg, const char *c_function_declaration_string) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return nullptr;
+  }
+
   auto function_declaration_string = const_cast <char *>(c_function_declaration_string);
 
   auto function_declaration_len = strlen(function_declaration_string);
@@ -205,7 +252,7 @@ Breakpoint *set_breakpoint(Debugger *dbg, const char *c_function_declaration_str
   defer { deinit(&declaration); };
 
   if (declaration.function_name == nullptr) {
-    fprintf(stderr, "ERROR: Cannot parse function declaration\n");
+    dbg_fail("cannot parse function declaration");
     return nullptr;
   }
 
@@ -225,6 +272,7 @@ Breakpoint *set_breakpoint(Debugger *dbg, const char *c_function_declaration_str
             bp->location.file_name = extract_file_name_from_path(bp->location.file_path);
             bp->location.line = line_entry->line;
 
+            dbg_success();
             return bp;
           }
         }
@@ -232,6 +280,7 @@ Breakpoint *set_breakpoint(Debugger *dbg, const char *c_function_declaration_str
     }
   }
 
+  dbg_fail("couldn't find specified function");
   return nullptr;
 }
 
@@ -253,6 +302,11 @@ bool is_suffix(char *str, const char *suffix) {
 }
 
 Breakpoint *set_breakpoint(Debugger *dbg, const char *c_file_name, u32 line) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return nullptr;
+  }
+
   auto file_name = const_cast <char *>(c_file_name);
 
   for (const auto &cu : dbg->dwarf.compilation_units()) {
@@ -267,12 +321,15 @@ Breakpoint *set_breakpoint(Debugger *dbg, const char *c_file_name, u32 line) {
           bp->location.file_path = const_cast <char *>(file->path.c_str());
           bp->location.file_name = extract_file_name_from_path(bp->location.file_path);
           bp->location.line = line_entry.line;
+
+          dbg_success();
           return bp;
         }
       }
     }
   }
 
+  dbg_fail("couldn't find specified source line");
   return nullptr;
 }
 
@@ -285,6 +342,8 @@ void print_breakpoints(Debugger * dbg) {
       printf("Breakpoint #%d at ?? (address 0x%lx); enabled: %d\n", count++, it->address, it->enabled);
     }
   }
+
+  dbg_success();
 }
 
 DBG_NAMESPACE_END
