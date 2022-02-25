@@ -17,5 +17,7 @@ if [ "$#" -ge 1 ] ; then
 else
   echo "Building stand-alone program"
   # Mode 2: compile debugger into stand-alone program
-  g++ -g test.cpp $LIB_ARGS -o test
+  # c++ `sdl2-config --cflags` -I imgui/ gui.cpp imgui/*.cpp `sdl2-config --libs` -lGL -ldl $LIB_ARGS
+  g++ `sdl2-config --cflags` -I imgui/ gui.cpp imgui/imgui_impl_opengl3.cpp `sdl2-config --libs` -lGL -ldl $LIB_ARGS -o debugger_gui
+  #g++ -g test.cpp $LIB_ARGS -o test
 fi
