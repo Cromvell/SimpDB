@@ -41,6 +41,17 @@ enum class Command_Status : u8 {
   FAIL,
 };
 
+struct Source_File {
+  char *file_path = nullptr;
+  char *file_name = nullptr;
+
+  u64 length;
+
+  Array<char *> lines;
+
+  char *content = nullptr;
+};
+
 struct Debugger {
   u32 debugee_pid = 0;
   char * executable_path = nullptr;
@@ -54,6 +65,8 @@ struct Debugger {
 
   dwarf::dwarf dwarf;
   elf::elf elf;
+
+  Array<Source_File> source_files;
 
   u64 load_address = 0;
   bool verbose = false;
@@ -92,14 +105,6 @@ void write_memory(Debugger * dbg, u64 address, u64 value);
 // Location discovery
 //
 
-struct Source_File {
-  char *file_path = nullptr;
-  char *file_name = nullptr;
-
-  u32 line_count;
-  u64 length;
-};
-
 struct Source_Location {
   char *file_path = nullptr;
   char *file_name = nullptr;
@@ -111,18 +116,17 @@ struct Source_Context {
   char *file_path = nullptr;
   char *file_name = nullptr;
 
-  u32 start_line;
-  u32 current_line;
-  u32 end_line;
+  u64 start_line;
+  u64 current_line;
+  u64 end_line;
 };
-
-Array<Source_File> get_sources(Debugger * dbg);
-void deinit(Array<Source_File> source_list); // Source list should be freed after the use
 
 void print_sources(Array<Source_File> sources);
 
 Source_Location get_source_location(Debugger * dbg);
 Source_Context get_source_context(Debugger * dbg, u32 line_count = 3);
+Array<Source_File> get_updated_sources(Debugger * dbg);
+
 void print_source_location(Source_Location * location);
 void print_source_context(Source_Context * context);
 

@@ -29,10 +29,9 @@ s32 main(s32 argc, char *argv[]) {
 
   dbg::print_breakpoints(d);
 
-  auto source_files = dbg::get_sources(d);
-  defer { deinit(source_files); };
   printf("\nSource file list:\n");
-  dbg::print_sources(source_files);
+  auto source_list = dbg::get_updated_sources(d);
+  dbg::print_sources(source_list);
   printf("\n");
 
   dbg::start(d);

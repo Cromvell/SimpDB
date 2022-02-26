@@ -365,6 +365,8 @@ void wait_for_signal(Debugger * dbg) {
   }
 }
 
+void load_sources(Debugger * dbg);
+
 // TODO: Handle arguments
 void debug(Debugger * dbg, const char * executable_path, const char * arguments) {
   if (dbg->state != Debugger_State::NOT_STARTED) {
@@ -403,6 +405,9 @@ void debug(Debugger * dbg, const char * executable_path, const char * arguments)
     wait_for_signal(dbg);
 
     fail = initialize_load_address(dbg);
+
+    load_sources(dbg);
+
     if (!fail) {
       dbg->state = Debugger_State::ATTACHED;
       dbg_success();
@@ -433,6 +438,9 @@ void attach(Debugger * dbg, u32 pid) {
   wait_for_signal(dbg);
 
   fail = initialize_load_address(dbg);
+
+  load_sources(dbg);
+
   if (fail) {
     dbg->state = Debugger_State::ATTACHED;
     dbg_success();
@@ -453,14 +461,14 @@ void start(Debugger *dbg) {
 }
 
 void stop(Debugger *dbg) {
-  if (dbg->state == Debugger_State::RUNNING) {
-    dbg->state = Debugger_State::NOT_STARTED;
+  if (dbg->state != Debugger_State::NOT_STARTED && dbg->state != Debugger_State::ATTACHED) {
+    dbg->state = Debugger_State::ATTACHED;
 
     // TODO: Handle forked child process and attached situation differentely
 
     dbg_success();
   } else {
-    dbg_fail("could stop debugger only in RUNNING state");
+    dbg_fail("couldn't stop debugger in NOT_STARTED and ATTACHED state");
   }
 }
 
@@ -470,26 +478,8 @@ inline char * extract_file_name_from_path(char *file_path) {
   return file_name;
 }
 
-inline u32 count_lines_in_file(char *file_path) {
-  auto file = fopen(file_path, "r");
-  defer { fclose(file); };
-
-  char c = 0;
-  u32 line_count = 0;
-  while ((c = fgetc(file)) != EOF) {
-    if (c == '\n')  line_count++;
-  }
-
-  return line_count;
-}
-
-Array<Source_File> get_sources(Debugger * dbg) {
+void load_sources(Debugger * dbg) {
   Array<Source_File> result;
-
-  if (dbg->state == Debugger_State::NOT_STARTED) {
-    dbg_fail("debugged program isn't loaded");
-    return Array<Source_File>();
-  }
 
   u32 file_index = 0;
   while (true) {
@@ -506,9 +496,34 @@ Array<Source_File> get_sources(Debugger * dbg) {
 
       auto file_path = const_cast <char *>(file->path.c_str());
       auto file_name = extract_file_name_from_path(file_path);
-      auto line_count = count_lines_in_file(file_path);
 
-      result.add((Source_File){file_path, file_name, line_count, file->length});
+      auto f = fopen(file_path, "rb");
+      defer { fclose(f); };
+
+      fseek(f, 0, SEEK_END);
+      u64 file_length = ftell(f);
+      fseek(f, 0, SEEK_SET);
+
+      auto content_buffer = static_cast <char *>(malloc(file_length + 1));
+
+      fread(content_buffer, 1, file_length, f);
+
+      content_buffer[file_length] = '\0';
+
+      Array<char *> line_marks;
+      line_marks.add(content_buffer);
+
+      char c = 0;
+      char * buffer_pointer = content_buffer;
+      while ((c = *buffer_pointer) != '\0') {
+        if (c == '\n') {
+          line_marks.add(buffer_pointer + 1);
+        }
+
+        buffer_pointer++;
+      }
+
+      result.add((Source_File){file_path, file_name, file_length, line_marks, content_buffer});
       file_index++;
       break;
     }
@@ -516,17 +531,24 @@ Array<Source_File> get_sources(Debugger * dbg) {
     if (!found_file_in_compilation_unit)  break;
   }
 
-  dbg_success();
-  return result;
+  dbg->source_files = result;
 }
 
-void deinit(Array<Source_File> sources) {
-  sources.deinit();
+Array<Source_File> get_updated_sources(Debugger * dbg) {
+  if (dbg->state == Debugger_State::NOT_STARTED) {
+    dbg_fail("debugged program isn't loaded");
+    return Array<Source_File>();
+  }
+
+  // TODO: Check for files get updated
+
+  dbg_success();
+  return dbg->source_files;
 }
 
 void print_sources(Array<Source_File> sources) {
   For (sources) {
-    printf("%s (lines=%d, length=%ld):\t%s\n", it.file_name, it.line_count, it.length, it.file_path);
+    printf("%s (lines=%d, length=%ld):\t%s\n", it.file_name, it.lines.count, it.length, it.file_path);
   }
 }
 

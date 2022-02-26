@@ -36,37 +36,43 @@ void deinit_debugger(dbg::Debugger * dbg) {
 }
 
 void show_code_panel() {
-  if (ImGui::Begin("Code")) {
+  if (ImGui::Begin("Code", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     if (ImGui::BeginTabBar("Files")) {
-      char *filenames[] = {
-                           "debugee.cpp",
-                           "debugee2.cpp",
-      };
-      bool is_tab_open[] = {
-                            true,
-                            true,
-      };
 
-      // Array<dbg::Source_File> sources = dbg::get_sources(dbg);
+      if (d->state == dbg::Debugger_State::NOT_STARTED) {
+        ImGui::EndTabBar();
+        ImGui::End();
+        return;
+      }
 
-      // For (sources) {
-      for (s32 i = 0; i < 4; i++) {
-        bool visible = ImGui::BeginTabItem(filenames[i], is_tab_open, 0);
+      auto sources = dbg::get_updated_sources(d);
 
-        if (visible) {
-          ImGui::PushID(&(filenames[i]));
-          // ImGui::PushID(it.filepath);
+      Array<bool> is_tab_open;
+      is_tab_open.init(sources.count);
 
-          u32 line_number = 0;
-          // For_Count (it.line_count) {
-          //   ImGui::Text(it.lines[line_number], line_number++));
-          // }
-          
-          ImGui::PopID();
+      For_it (sources, source) {
+        if (ImGui::BeginTabItem(source.file_name)) {
+          ImGui::BeginChild("##file_content"); // Child for content scrollbar
+
+          For_Count (source.lines.count, line_number) {
+            char line_number_buf[128];
+            sprintf(line_number_buf, "%d", line_number + 1);
+
+            auto line_end = source.lines[line_number];
+            while (*line_end != '\n' && *line_end != '\0') {
+              line_end++;
+            }
+
+            u64 line_length = line_end - source.lines[line_number];
+            
+            ImGui::Button(line_number_buf); ImGui::SameLine();
+            ImGui::Text("%.*s", line_length, source.lines[line_number]);
+          }
+
+          ImGui::EndChild();
           ImGui::EndTabItem();
         }
       }
-
       ImGui::EndTabBar();
     }
     ImGui::End();
@@ -182,7 +188,7 @@ void show_debugger_window() {
     ImGui::EndMainMenuBar();
   }
 
-  // show_code_panel();
+  show_code_panel();
 }
 
 s32 main() {
