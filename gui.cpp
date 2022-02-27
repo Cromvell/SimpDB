@@ -51,27 +51,67 @@ void show_code_panel() {
       is_tab_open.init(sources.count);
 
       For_it (sources, source) {
+        ImGui::PushID(source.file_path);
         if (ImGui::BeginTabItem(source.file_name)) {
           ImGui::BeginChild("##file_content"); // Child for content scrollbar
 
-          For_Count (source.lines.count, line_number) {
+          For_Range (1, source.lines.count + 1, line_number) {
             char line_number_buf[128];
-            sprintf(line_number_buf, "%d", line_number + 1);
+            sprintf(line_number_buf, "%d", line_number);
 
-            auto line_end = source.lines[line_number];
+            auto line_end = source.lines[line_number - 1];
             while (*line_end != '\n' && *line_end != '\0') {
               line_end++;
             }
 
-            u64 line_length = line_end - source.lines[line_number];
+            u64 line_length = line_end - source.lines[line_number - 1];
+
+            // TODO: Make the search for breakpoint by Source_Location
+            bool breakpoint_exists_on_the_line = false;
+            dbg::Breakpoint * existing_breakpoint = nullptr;
+            For (d->breakpoints) {
+              if (strcmp(it->location.file_path, source.file_path) == 0) {
+                if (it->location.line == line_number) {
+                  breakpoint_exists_on_the_line = true;
+                  existing_breakpoint = it;
+                  break;
+                }
+              }
+            }
             
-            ImGui::Button(line_number_buf); ImGui::SameLine();
-            ImGui::Text("%.*s", line_length, source.lines[line_number]);
+            if (ImGui::Button(line_number_buf)) {
+              if (!breakpoint_exists_on_the_line) {
+                set_breakpoint(d, source.file_name, line_number);
+              } else {
+                remove_breakpoint(d, existing_breakpoint);
+              }
+            }
+
+            ImGui::SameLine();
+
+            // Breakpoint and PC marks
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const ImU32 bk_col = ImColor(ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+            const u32 bk_sz = 6.0f;
+            if (breakpoint_exists_on_the_line) {
+              ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+              draw_list->AddCircleFilled(ImVec2(p.x + bk_sz*0.5f, p.y + bk_sz*1.5f), bk_sz, bk_col);
+
+              // ImGui::SameLine();
+            }
+
+            ImGui::SetCursorPos({ImGui::GetCursorPosX() + bk_sz*2.0f,
+                                 ImGui::GetCursorPosY()});
+
+            ImGui::Text("%.*s", line_length, source.lines[line_number - 1]);
           }
 
           ImGui::EndChild();
           ImGui::EndTabItem();
         }
+
+        ImGui::PopID();
       }
       ImGui::EndTabBar();
     }
@@ -104,8 +144,8 @@ void show_debugger_window() {
       switch (mode_idx) {
       case 0: {
         ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
-        bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
-        if (is_debugger_running) {
+        bool is_debugger_loaded = (d->state != dbg::Debugger_State::NOT_STARTED);
+        if (is_debugger_loaded) {
           input_flags |= ImGuiInputTextFlags_ReadOnly;
         }
 
@@ -121,13 +161,15 @@ void show_debugger_window() {
         if (ImGui::InputTextWithHint("##arguments", "program arguments", debug_arguments, IM_ARRAYSIZE(debug_arguments), input_flags)) {
         }
 
-        if (ImGui::MenuItem("Start debug session", NULL, false, !is_debugger_running)) {
+        if (ImGui::MenuItem("Load debug session", NULL, false, d->state == dbg::Debugger_State::NOT_STARTED)) {
           dbg::debug(d, debug_path, debug_arguments);
-          dbg::start(d);
         }
 
-        if (ImGui::MenuItem("Stop debug session", NULL, false, is_debugger_running)) {
-          dbg::stop(d);
+        if (ImGui::MenuItem("Unload debug session", NULL, false, d->state == dbg::Debugger_State::ATTACHED)) {
+          if (d->state == dbg::Debugger_State::RUNNING) {
+            dbg::stop(d);
+          }
+          dbg::unload(d);
         }
         break;
       }
@@ -138,23 +180,24 @@ void show_debugger_window() {
         static s32 pid = 0;
         ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
 
-        bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
-        if (is_debugger_running) {
+        bool is_debugger_loaded = (d->state != dbg::Debugger_State::NOT_STARTED);
+        if (is_debugger_loaded) {
           input_flags |= ImGuiInputTextFlags_ReadOnly;
         }
 
         if (ImGui::InputScalar("##pid", ImGuiDataType_U32, &pid, NULL, NULL, "%u", input_flags)) {
         }
 
-        if (ImGui::MenuItem("Attach to a process", NULL, false, !is_debugger_running)) {
+        if (ImGui::MenuItem("Attach to a process", NULL, false, d->state == dbg::Debugger_State::NOT_STARTED)) {
           dbg::attach(d, (u32)pid);
-          dbg::start(d);
         }
 
-        if (ImGui::MenuItem("Detach from a process", NULL, false, is_debugger_running)) {
-          dbg::stop(d);
+        if (ImGui::MenuItem("Detach from a process", NULL, false, d->state == dbg::Debugger_State::ATTACHED)) {
+          if (d->state == dbg::Debugger_State::RUNNING) {
+            dbg::stop(d);
+          }
+          dbg::unload(d);
         }
-
         break;
       }
       }
@@ -166,8 +209,16 @@ void show_debugger_window() {
 
     if (ImGui::BeginMenu("Debug")) {
       bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
-      if (ImGui::MenuItem("Continue", "F5", false, is_debugger_running)) {
-        dbg::continue_execution(d);
+      if (ImGui::MenuItem("Start/Continue", "F5", false, d->state != dbg::Debugger_State::NOT_STARTED)) {
+        if (is_debugger_running) {
+          dbg::continue_execution(d);
+        } else {
+          dbg::start(d);
+        }
+      }
+
+      if (ImGui::MenuItem("Stop", "Shift+F5", false, is_debugger_running)) {
+        dbg::stop(d);
       }
 
       if (ImGui::MenuItem("Step over", "F10", false, is_debugger_running)) {

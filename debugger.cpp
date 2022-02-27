@@ -266,6 +266,8 @@ s32 initialize_load_address(Debugger * dbg) {
     if (!file_path) {
       printf("Error: Couldn't find load address of file: %s\n", dbg->executable_path);
       assert(false);
+    } else {
+      free(file_path);
     }
 
     dbg->load_address = start_addr;
@@ -366,6 +368,7 @@ void wait_for_signal(Debugger * dbg) {
 }
 
 void load_sources(Debugger * dbg);
+void unload_sources(Debugger * dbg);
 
 // TODO: Handle arguments
 void debug(Debugger * dbg, const char * executable_path, const char * arguments) {
@@ -447,6 +450,26 @@ void attach(Debugger * dbg, u32 pid) {
   }
 }
 
+void unload(Debugger * dbg) {
+  if (dbg->state == Debugger_State::ATTACHED) {
+    unload_sources(dbg);
+
+    dbg->dwarf.~dwarf();
+    dbg->elf.~elf();
+
+    For (dbg->breakpoints) {
+      remove_breakpoint(dbg, it);
+    }
+    dbg->breakpoint_map.deinit();
+    dbg->breakpoints.deinit();
+
+    dbg->state == Debugger_State::NOT_STARTED;
+    dbg_success();
+  } else {
+    dbg_fail("could start debugger only in ATTACHED state");
+  }
+}
+
 void start(Debugger *dbg) {
   if (dbg->state == Debugger_State::ATTACHED) {
     dbg->state = Debugger_State::RUNNING;
@@ -461,14 +484,14 @@ void start(Debugger *dbg) {
 }
 
 void stop(Debugger *dbg) {
-  if (dbg->state != Debugger_State::NOT_STARTED && dbg->state != Debugger_State::ATTACHED) {
+  if (dbg->state == Debugger_State::RUNNING) {
     dbg->state = Debugger_State::ATTACHED;
 
     // TODO: Handle forked child process and attached situation differentely
 
     dbg_success();
   } else {
-    dbg_fail("couldn't stop debugger in NOT_STARTED and ATTACHED state");
+    dbg_fail("could stop debugger only in RUNNING state");
   }
 }
 
@@ -480,6 +503,9 @@ inline char * extract_file_name_from_path(char *file_path) {
 
 void load_sources(Debugger * dbg) {
   Array<Source_File> result;
+  Hash_Table<char *, bool> added_file_paths;
+  added_file_paths.init();
+  defer { added_file_paths.deinit(); };
 
   u32 file_index = 0;
   while (true) {
@@ -496,6 +522,12 @@ void load_sources(Debugger * dbg) {
 
       auto file_path = const_cast <char *>(file->path.c_str());
       auto file_name = extract_file_name_from_path(file_path);
+
+      // There could be duplicates of file path
+      if (added_file_paths.exists(file_path)) {
+        file_index++;
+        break;
+      }
 
       auto f = fopen(file_path, "rb");
       defer { fclose(f); };
@@ -524,6 +556,7 @@ void load_sources(Debugger * dbg) {
       }
 
       result.add((Source_File){file_path, file_name, file_length, line_marks, content_buffer});
+      added_file_paths.insert(file_path, true);
       file_index++;
       break;
     }
@@ -532,6 +565,14 @@ void load_sources(Debugger * dbg) {
   }
 
   dbg->source_files = result;
+}
+
+void unload_sources(Debugger * dbg) {
+  For (dbg->source_files) {
+    it.lines.deinit();
+    if (it.content) free(it.content);
+  }
+  dbg->source_files.deinit();
 }
 
 Array<Source_File> get_updated_sources(Debugger * dbg) {

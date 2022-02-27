@@ -290,13 +290,13 @@ Breakpoint *set_breakpoint(Debugger *dbg, const char *c_function_declaration_str
 //  Breakpoint at source line
 //
 
-bool is_suffix(char *str, const char *suffix) {
+bool is_suffix(const char *str, char *suffix) {
   if (!str || !suffix)  return false;
 
   auto str_len = strlen(str);
-  auto suffix_len = strlen(str);
+  auto suffix_len = strlen(suffix);
 
-  char *str_suffix = (str + str_len) - suffix_len;
+  const char *str_suffix = (str + str_len) - suffix_len;
 
   return strncmp(str_suffix, suffix, suffix_len) == 0;
 }
@@ -310,21 +310,20 @@ Breakpoint *set_breakpoint(Debugger *dbg, const char *c_file_name, u32 line) {
   auto file_name = const_cast <char *>(c_file_name);
 
   for (const auto &cu : dbg->dwarf.compilation_units()) {
-    if (is_suffix(file_name, at_name(cu.root()).c_str())) {
-      const auto &lt = cu.get_line_table();
+    const auto &lt = cu.get_line_table();
 
-      for (const auto &line_entry : lt) {
-        if (line_entry.is_stmt && line_entry.line == line) {
-          auto bp = set_breakpoint(dbg, offset_dwarf_address(dbg, line_entry.address));
+    for (const auto &line_entry : lt) {
+      auto file = lt.get_file(line_entry.file_index);
 
-          auto file = lt.get_file(line_entry.file_index);
-          bp->location.file_path = const_cast <char *>(file->path.c_str());
-          bp->location.file_name = extract_file_name_from_path(bp->location.file_path);
-          bp->location.line = line_entry.line;
+      if (line_entry.is_stmt && is_suffix(file->path.c_str(), file_name) && line_entry.line == line) {
+        auto bp = set_breakpoint(dbg, offset_dwarf_address(dbg, line_entry.address));
 
-          dbg_success();
-          return bp;
-        }
+        bp->location.file_path = const_cast <char *>(file->path.c_str());
+        bp->location.file_name = extract_file_name_from_path(bp->location.file_path);
+        bp->location.line = line_entry.line;
+
+        dbg_success();
+        return bp;
       }
     }
   }

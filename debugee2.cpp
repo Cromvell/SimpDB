@@ -77,22 +77,22 @@ void overloaded_func(const char * foo){
 }
 
 void debugee2_call() {
-    Foo obj;
-    obj.member_function(22);
-    Foo::static_member_function(22);
+  Foo obj;
+  obj.member_function(22);
+  Foo::static_member_function(22);
 
-    const char * ch = "!";
-    overloaded_func((char *)"Wat?");
-    overloaded_func(ch);
-    overloaded_func(42);
+  const char * ch = "!";
+  overloaded_func((char *)"Wat?");
+  overloaded_func(ch);
+  overloaded_func(42);
 
-    long unsigned int lui = 100000000000000;
-    overloaded_func(lui, 42);
-    overloaded_func(lui, (char *)"ponk");
+  long unsigned int lui = 100000000000000;
+  overloaded_func(lui, 42);
+  overloaded_func(lui, (char *)"ponk");
 
-    int value = 69;
-    int *a = &value, **b = &a, ***c = &b, ****d = &c, *****e = &d, ******f = &e;
-    many_args((char *)"asdf", 1, 3.14, f);
+  int value = 69;
+  int *a = &value, **b = &a, ***c = &b, ****d = &c, *****e = &d, ******f = &e;
+  many_args((char *)"asdf", 1, 3.14, f);
 
-    many_args((char *)"second_overload", 1, 3.14, e);
+  many_args((char *)"second_overload", 1, 3.14, e);
 }

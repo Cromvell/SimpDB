@@ -78,8 +78,7 @@ void deinit(Debugger * dbg);
 void debug(Debugger * dbg, const char * executable_path, const char * arguments);
 void attach(Debugger * dbg, u32 pid);
 
-void start(Debugger *dbg);
-void stop(Debugger *dbg);
+void unload(Debugger * dbg);
 
 //
 // Reading and writing
@@ -218,6 +217,9 @@ void deinit(Array<Symbol> symbol_table); // Symbols table should be freed after 
 //
 // Stepping
 //
+void start(Debugger *dbg);
+void stop(Debugger *dbg);
+
 void continue_execution(Debugger * dbg);
 void step_in(Debugger * dbg);
 void step_out(Debugger * dbg);
