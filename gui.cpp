@@ -242,6 +242,33 @@ void show_debugger_window() {
   show_code_panel();
 }
 
+void debugger_update() {
+  if (!ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F5)) {
+    bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
+    if (is_debugger_running) {
+      dbg::continue_execution(d);
+    } else {
+      dbg::start(d);
+    }
+  }
+
+  if (ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F5)) {
+    dbg::stop(d);
+  }
+
+  if (ImGui::IsKeyPressed(ImGuiKey_F10)) {
+    dbg::step_over(d);
+  }
+
+  if (!ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F11)) {
+    dbg::step_in(d);
+  }
+
+  if (ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F11)) {
+    dbg::step_out(d);
+  }
+}
+
 s32 main() {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
     printf("Error: %s\n", SDL_GetError());
@@ -296,6 +323,8 @@ s32 main() {
       if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window))
         done = true;
     }
+
+    debugger_update();
 
     // Start the Dear ImGui frame
     ImGui_ImplOpenGL3_NewFrame();
