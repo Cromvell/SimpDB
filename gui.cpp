@@ -89,17 +89,25 @@ void show_code_panel() {
 
             ImGui::SameLine();
 
-            // Breakpoint and PC marks
+            // Breakpoint markers
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const ImU32 bk_col = ImColor(ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
             const u32 bk_sz = 6.0f;
+            ImDrawList* draw_list = ImGui::GetWindowDrawList();
             if (breakpoint_exists_on_the_line) {
-              ImDrawList* draw_list = ImGui::GetWindowDrawList();
-
               draw_list->AddCircleFilled(ImVec2(p.x + bk_sz*0.5f, p.y + bk_sz*1.5f), bk_sz, bk_col);
-
-              // ImGui::SameLine();
             }
+
+            // PC marker
+            if (d->state == dbg::Debugger_State::RUNNING) {
+              auto pc_location = dbg::get_source_location(d);
+              if (strcmp(pc_location.file_path, source.file_path) == 0 && pc_location.line == line_number) {
+                const ImU32 pc_col = ImColor(ImVec4(1.0f, 1.0f, 0.2f, 1.0f));
+                const float32 pc_th = 4.0f;
+                draw_list->AddLine(ImVec2(p.x - bk_sz*0.5f, p.y + bk_sz*1.5f), ImVec2(p.x + bk_sz*1.5f, p.y + bk_sz*1.5f), pc_col, pc_th);
+              }
+            }
+
 
             ImGui::SetCursorPos({ImGui::GetCursorPosX() + bk_sz*2.0f,
                                  ImGui::GetCursorPosY()});
