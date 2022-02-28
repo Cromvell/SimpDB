@@ -243,10 +243,71 @@ void show_stack_panel() {
   ImGui::End();
 }
 
-void show_register_panel() { }
+void show_register_panel() {
+  if (ImGui::Begin("Registers")) {
+    if (ImGui::BeginTable("##register_table", 2)) {
 
-// ???
-void show_symbols_panel() { }
+      // Table header
+      ImGui::TableNextColumn(); ImGui::Text("Register name");
+      ImGui::TableNextColumn(); ImGui::Text("Value");
+      ImGui::TableNextRow();
+
+      if (d->state == dbg::Debugger_State::RUNNING) {
+        u32 reg_id = 0;
+        while ((dbg::Register)reg_id < dbg::Register::UNKNOWN) {
+          auto reg = (dbg::Register)reg_id;
+
+          auto reg_value = dbg::read_register(d, reg);
+        
+          ImGui::TableNextColumn(); ImGui::Text("%s", register_to_string(reg));
+          ImGui::TableNextColumn(); ImGui::Text("0x%lx", reg_value);
+          ImGui::TableNextRow();
+
+          reg_id++;
+        }
+      }
+
+    }
+    ImGui::EndTable();
+  }
+  ImGui::End();
+}
+
+void show_symbols_panel() {
+  if (ImGui::Begin("Symbols")) {
+    static char symbol_query[256];
+    auto input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
+    bool query_entered = ImGui::InputTextWithHint("##symbol_query", "symbol query", symbol_query, IM_ARRAYSIZE(symbol_query), input_flags);
+
+    ImGui::SameLine();
+
+    bool search_button_pressed = ImGui::Button("Search");
+
+    static Array<dbg::Symbol> found_symbols;
+    if ((query_entered || search_button_pressed) && strlen(symbol_query) > 0) {
+      found_symbols = dbg::lookup_symbol(d, symbol_query);
+    }
+
+    if (ImGui::BeginTable("##symbols_table", 3)) {
+
+      // Table header
+      ImGui::TableNextColumn(); ImGui::Text("Symbol name");
+      ImGui::TableNextColumn(); ImGui::Text("Type");
+      ImGui::TableNextColumn(); ImGui::Text("Address");
+      ImGui::TableNextRow();
+
+      For (found_symbols) {
+        ImGui::TableNextColumn(); ImGui::Text("%s", it.name);
+        ImGui::TableNextColumn(); ImGui::Text("%s", dbg::to_string(it.type));
+        ImGui::TableNextColumn(); ImGui::Text("0x%lx", it.address);
+        ImGui::TableNextRow();
+      }
+    }
+    ImGui::EndTable();
+  }
+  ImGui::End();
+}
+
 void show_memory_panel() { }
 
 void show_debugger_window() {
@@ -360,6 +421,8 @@ void show_debugger_window() {
   show_breakpoints_panel();
   show_variables_panel();
   show_stack_panel();
+  show_register_panel();
+  show_symbols_panel();
 }
 
 void debugger_update() {
