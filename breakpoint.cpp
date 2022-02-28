@@ -37,7 +37,7 @@ void disable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
 
   auto instruction = read_memory(dbg, breakpoint->address);
 
-  auto restored_instruction = ((instruction & ~0xff) | breakpoint->saved_instruction);
+  u64 restored_instruction = ((instruction & ~0xff) | breakpoint->saved_instruction);
 
   write_memory(dbg, breakpoint->address, restored_instruction);
 

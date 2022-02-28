@@ -92,10 +92,15 @@ void show_code_panel() {
             // Breakpoint markers
             const ImVec2 p = ImGui::GetCursorScreenPos();
             const ImU32 bk_col = ImColor(ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+            const ImU32 bk_col_dis = ImColor(ImVec4(1.0f, 0.2f, 0.2f, 0.5f));
             const u32 bk_sz = 6.0f;
             ImDrawList* draw_list = ImGui::GetWindowDrawList();
             if (breakpoint_exists_on_the_line) {
-              draw_list->AddCircleFilled(ImVec2(p.x + bk_sz*0.5f, p.y + bk_sz*1.5f), bk_sz, bk_col);
+              if (existing_breakpoint->enabled) {
+                draw_list->AddCircleFilled(ImVec2(p.x + bk_sz*0.5f, p.y + bk_sz*1.5f), bk_sz, bk_col);
+              } else {
+                draw_list->AddCircleFilled(ImVec2(p.x + bk_sz*0.5f, p.y + bk_sz*1.5f), bk_sz, bk_col_dis);
+              }
             }
 
             // PC marker
@@ -127,7 +132,49 @@ void show_code_panel() {
   }
 }
 
-void show_breakpoints_panel() { }
+void show_breakpoints_panel() {
+  if (ImGui::Begin("Breakpoints")) {
+    if (ImGui::BeginTable("##breakpoints_table", 4)) {
+      // Table header
+      ImGui::TableNextColumn(); ImGui::Text("Enabled");
+      ImGui::TableNextColumn(); ImGui::Text("Address");
+      ImGui::TableNextColumn(); ImGui::Text("Location");
+      ImGui::TableNextColumn();
+      ImGui::TableNextRow();
+
+      For (d->breakpoints) {
+        bool checkbox_enabled = it->enabled;
+        char checkbox_name[128];
+        sprintf(checkbox_name, "##breakpoint_%lu", it->address);
+
+        char remove_button_name[128];
+        sprintf(remove_button_name, "Remove##%lu", it->address);
+
+        ImGui::TableNextColumn(); ImGui::Checkbox(checkbox_name, &checkbox_enabled);
+        ImGui::TableNextColumn(); ImGui::Text("0x%lx", (void *)it->address);
+        ImGui::TableNextColumn(); ImGui::Text("%s:%lu", it->location.file_name, it->location.line);
+        ImGui::TableNextColumn();
+
+        if (ImGui::Button(remove_button_name)) {
+          dbg::remove_breakpoint(d, it);
+        }
+
+        // Change breakpoint state
+        if (checkbox_enabled != it->enabled) {
+          if (checkbox_enabled) {
+            dbg::enable_breakpoint(d, it);
+          } else {
+            dbg::disable_breakpoint(d, it);
+          }
+        }
+
+        ImGui::TableNextRow();
+      }
+      ImGui::EndTable();
+    }
+    ImGui::End();
+  }
+}
 
 void show_register_panel() { }
 
@@ -248,6 +295,7 @@ void show_debugger_window() {
   }
 
   show_code_panel();
+  show_breakpoints_panel();
 }
 
 void debugger_update() {
