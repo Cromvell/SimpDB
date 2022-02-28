@@ -94,6 +94,8 @@ enum class Register : u8 {
   ds, es, fs, gs, UNKNOWN
 };
 
+char * register_to_string(Register reg);
+
 u64 read_register(Debugger * dbg, Register reg);
 void write_register(Debugger * dbg, Register reg, u64 value);
 

@@ -23,8 +23,16 @@
 // #include "imgui/imgui_impl_opengl3.cpp" // TODO: Eleminate second TU
 #include "imgui/imgui_impl_sdl.cpp"
 
+// TODO: Refactor this to DebuggerGUI structure
+// struct DebuggerGUI { }
+
 dbg::Debugger debugger;
 dbg::Debugger * d = &debugger;
+
+dbg::Source_Location g_source_location;
+dbg::Source_Location g_last_source_location;
+
+Array<dbg::Variable> g_local_variables;
 
 void init_debugger(dbg::Debugger * dbg) {
   init(dbg);
@@ -113,7 +121,6 @@ void show_code_panel() {
               }
             }
 
-
             ImGui::SetCursorPos({ImGui::GetCursorPosX() + bk_sz*2.0f,
                                  ImGui::GetCursorPosY()});
 
@@ -176,18 +183,48 @@ void show_breakpoints_panel() {
   }
 }
 
+
+void show_variables_panel() {
+  if (ImGui::Begin("Local variables")) {
+    if (ImGui::BeginTable("##variables_table", 3)) {
+      // Header
+      ImGui::TableNextColumn(); ImGui::Text("Name");
+      ImGui::TableNextColumn(); ImGui::Text("Value");
+      ImGui::TableNextColumn(); ImGui::Text("Location");
+      ImGui::TableNextRow();
+
+      For (g_local_variables) {
+        ImGui::TableNextColumn(); ImGui::Text("%s", it.name);
+        ImGui::TableNextColumn(); ImGui::Text("%d", it.value);
+        ImGui::TableNextColumn();
+
+        switch (it.location) {
+        case dbg::Variable_Location::REGISTER:
+          ImGui::Text("In register %d", dbg::register_to_string(it.reg));
+          break;
+        case dbg::Variable_Location::MEMORY:
+          ImGui::Text("In memory at 0x%lx", it.address);
+          break;
+        }
+
+        ImGui::TableNextRow();
+      }
+
+      ImGui::EndTable();
+    }
+    ImGui::End();
+  }
+}
+
 void show_register_panel() { }
 
 void show_stack_panel() { }
-
-void show_variables_panel() { }
 
 // ???
 void show_symbols_panel() { }
 void show_memory_panel() { }
 
 void show_debugger_window() {
-
   ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
 
   if (ImGui::BeginMainMenuBar()) {
@@ -296,11 +333,25 @@ void show_debugger_window() {
 
   show_code_panel();
   show_breakpoints_panel();
+  show_variables_panel();
 }
 
 void debugger_update() {
+  bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
+  static dbg::Debugger_State last_debugger_state = d->state;
+
+  if (is_debugger_running) {
+    if (last_debugger_state != dbg::Debugger_State::RUNNING) {
+      g_last_source_location = g_source_location = dbg::get_source_location(d);
+    } else {
+      g_last_source_location = g_source_location;
+      g_source_location = dbg::get_source_location(d);
+
+      g_local_variables = dbg::get_variables(d);
+    }
+  }
+
   if (!ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F5)) {
-    bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
     if (is_debugger_running) {
       dbg::continue_execution(d);
     } else {
@@ -323,6 +374,12 @@ void debugger_update() {
   if (ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F11)) {
     dbg::step_out(d);
   }
+
+  last_debugger_state = d->state;
+}
+
+void debugger_loop_cleanup() {
+  g_local_variables.deinit();
 }
 
 s32 main() {
@@ -396,6 +453,8 @@ s32 main() {
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(window);
+
+    debugger_loop_cleanup();
   }
 
   // Clean up

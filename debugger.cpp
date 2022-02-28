@@ -161,6 +161,11 @@ u64 read_dwarf_register(Debugger *dbg, u32 register_number) {
   return read_dwarf_register(dbg->debugee_pid, register_number);
 }
 
+inline char * register_to_string(Register reg) {
+  return global_register_descriptors[(u32)reg].name;
+}
+
+
 //
 //  Registers
 //
