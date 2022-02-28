@@ -31,6 +31,7 @@ dbg::Debugger * d = &debugger;
 
 dbg::Source_Location g_source_location;
 dbg::Source_Location g_last_source_location;
+Array<dbg::Frame> g_stack_trace;
 
 Array<dbg::Variable> g_local_variables;
 
@@ -133,10 +134,10 @@ void show_code_panel() {
 
         ImGui::PopID();
       }
-      ImGui::EndTabBar();
     }
-    ImGui::End();
+    ImGui::EndTabBar();
   }
+  ImGui::End();
 }
 
 void show_breakpoints_panel() {
@@ -177,12 +178,11 @@ void show_breakpoints_panel() {
 
         ImGui::TableNextRow();
       }
-      ImGui::EndTable();
     }
-    ImGui::End();
+    ImGui::EndTable();
   }
+  ImGui::End();
 }
-
 
 void show_variables_panel() {
   if (ImGui::Begin("Local variables")) {
@@ -209,16 +209,41 @@ void show_variables_panel() {
 
         ImGui::TableNextRow();
       }
-
-      ImGui::EndTable();
     }
-    ImGui::End();
+    ImGui::EndTable();
   }
+  ImGui::End();
+}
+
+void show_stack_panel() {
+  if (ImGui::Begin("Stack trace")) {
+    if (ImGui::BeginTable("##stack_table", 4)) {
+
+      // Table header
+      ImGui::TableNextColumn(); ImGui::Text("#");
+      ImGui::TableNextColumn(); ImGui::Text("Function name");
+      ImGui::TableNextColumn(); ImGui::Text("Location");
+      ImGui::TableNextColumn(); ImGui::Text("Address");
+      ImGui::TableNextRow();
+
+      u32 frame_id = 0;
+      For (g_stack_trace) {
+        ImGui::TableNextColumn(); ImGui::Text("%d", frame_id);
+        ImGui::TableNextColumn(); ImGui::Text("%s", it.function_name);
+        ImGui::TableNextColumn(); ImGui::Text("%s:%d", it.location.file_name, it.location.line);
+        ImGui::TableNextColumn(); ImGui::Text("0x%lx", it.address);
+        ImGui::TableNextRow();
+
+        frame_id++;
+      }
+
+    }
+    ImGui::EndTable();
+  }
+  ImGui::End();
 }
 
 void show_register_panel() { }
-
-void show_stack_panel() { }
 
 // ???
 void show_symbols_panel() { }
@@ -334,6 +359,7 @@ void show_debugger_window() {
   show_code_panel();
   show_breakpoints_panel();
   show_variables_panel();
+  show_stack_panel();
 }
 
 void debugger_update() {
@@ -348,6 +374,7 @@ void debugger_update() {
       g_source_location = dbg::get_source_location(d);
 
       g_local_variables = dbg::get_variables(d);
+      g_stack_trace = dbg::get_stack_trace(d);
     }
   }
 
