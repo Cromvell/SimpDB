@@ -90,9 +90,9 @@ void show_code_panel() {
             
             if (ImGui::Button(line_number_buf)) {
               if (!breakpoint_exists_on_the_line) {
-                set_breakpoint(d, source.file_name, line_number);
+                dbg::set_breakpoint(d, source.file_name, line_number);
               } else {
-                remove_breakpoint(d, existing_breakpoint);
+                dbg::remove_breakpoint(d, existing_breakpoint);
               }
             }
 
@@ -115,10 +115,12 @@ void show_code_panel() {
             // PC marker
             if (d->state == dbg::Debugger_State::RUNNING) {
               auto pc_location = dbg::get_source_location(d);
-              if (strcmp(pc_location.file_path, source.file_path) == 0 && pc_location.line == line_number) {
-                const ImU32 pc_col = ImColor(ImVec4(1.0f, 1.0f, 0.2f, 1.0f));
-                const float32 pc_th = 4.0f;
-                draw_list->AddLine(ImVec2(p.x - bk_sz*0.5f, p.y + bk_sz*1.5f), ImVec2(p.x + bk_sz*1.5f, p.y + bk_sz*1.5f), pc_col, pc_th);
+              if (d->last_command_status == dbg::Command_Status::SUCCESS) {
+                if (strcmp(pc_location.file_path, source.file_path) == 0 && pc_location.line == line_number) {
+                  const ImU32 pc_col = ImColor(ImVec4(1.0f, 1.0f, 0.2f, 1.0f));
+                  const float32 pc_th = 4.0f;
+                  draw_list->AddLine(ImVec2(p.x - bk_sz*0.5f, p.y + bk_sz*1.5f), ImVec2(p.x + bk_sz*1.5f, p.y + bk_sz*1.5f), pc_col, pc_th);
+                }
               }
             }
 
@@ -150,6 +152,19 @@ void show_breakpoints_panel() {
       ImGui::TableNextColumn();
       ImGui::TableNextRow();
 
+      // Removing breakpoints marked on last iteration
+      static Array<dbg::Breakpoint *> to_remove;
+      if (to_remove.count == -1) {
+        to_remove.init();
+      }
+
+      For (to_remove) {
+        dbg::remove_breakpoint(d, it);
+      }
+
+      // Breakpoints removed, so clear the list
+      to_remove.reset();
+
       For (d->breakpoints) {
         bool checkbox_enabled = it->enabled;
         char checkbox_name[128];
@@ -164,7 +179,7 @@ void show_breakpoints_panel() {
         ImGui::TableNextColumn();
 
         if (ImGui::Button(remove_button_name)) {
-          dbg::remove_breakpoint(d, it);
+          to_remove.add(it);
         }
 
         // Change breakpoint state

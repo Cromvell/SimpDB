@@ -751,8 +751,9 @@ void step_over_breakpoint(Debugger *dbg) {
 
 void single_instruction_step_with_breakpoint_check(Debugger *dbg) {
   bool on_breakpoint = dbg->breakpoint_map.exists(get_pc(dbg));
+  auto breakpoint = dbg->breakpoint_map[get_pc(dbg)];
 
-  if (on_breakpoint) {
+  if (on_breakpoint && breakpoint && (*breakpoint)->enabled) {
     step_over_breakpoint(dbg);
   } else {
     step_single_instruction(dbg);
@@ -791,6 +792,12 @@ void step_in(Debugger * dbg) {
 
     single_instruction_step_with_breakpoint_check(dbg);
   }
+
+  // @Hack: We're stepping over on function entry, because there's no source line
+  //        in the line table associated with function definition. Step over moves
+  //        us on the first line of function, which can be correctly associated for
+  //        operations like get_source_location
+  step_over(dbg);
 
   dbg_success();
 }
@@ -856,6 +863,14 @@ void step_over(Debugger * dbg) {
     to_delete.deinit();
   };
 
+  Array<Breakpoint *> to_disable;
+  defer {
+    For (to_disable) {
+      disable_breakpoint(dbg, it);
+    }
+    to_disable.deinit();
+  };
+
   while (line->address < func_end) {
     auto load_address = offset_dwarf_address(dbg, line->address);
     if (line->address != current_line->address) {
@@ -864,6 +879,13 @@ void step_over(Debugger * dbg) {
       if (!exists_breakpoint_with_load_address) {
         auto breakpoint = set_breakpoint(dbg, load_address);
         to_delete.add(breakpoint);
+      } else {
+        auto breakpoint = *dbg->breakpoint_map[load_address];
+
+        if (!breakpoint->enabled) {
+          enable_breakpoint(dbg, breakpoint);
+          to_disable.add(breakpoint);
+        }
       }
     }
 
