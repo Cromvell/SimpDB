@@ -9,6 +9,7 @@
 s32 main(s32 argc, char *argv[]) {
   dbg::Debugger debugger;
   dbg::Debugger *d = &debugger;
+  d->verbose = true;
 
   dbg::init(d);
   defer { dbg::deinit(d); };
@@ -108,16 +109,16 @@ s32 main(s32 argc, char *argv[]) {
   }
   printf("\n");
 
-  // dbg::continue_execution(d);
-  // dbg::continue_execution(d);
-  // dbg::continue_execution(d);
-  // dbg::continue_execution(d);
-  // dbg::continue_execution(d);
-  // dbg::continue_execution(d);
+  dbg::continue_execution(d);
+  dbg::continue_execution(d);
+  dbg::continue_execution(d);
+  dbg::continue_execution(d);
+  dbg::continue_execution(d);
+  dbg::continue_execution(d);
 
   dbg::stop(d);
 
   printf("Debugging session finished!\n");
 
-  return 0;
+  return -1337;
 }

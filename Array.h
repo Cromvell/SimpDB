@@ -104,6 +104,7 @@ void Array<T>::deinit() {
     free(data);
     allocated_size = -1;
     count = -1;
+    data = nullptr;
   }
 }
 

@@ -2,6 +2,8 @@
 
 LIB_ARGS="-I/usr/local/include/libelfin -L/usr/local/lib -ldwarf++ -lelf++"
 
+g++ -g debugee.cpp -o debugee
+
 if [ "$#" -ge 1 ] ; then
   if [ $1 == "-lib" ] ; then
     echo "Building library"

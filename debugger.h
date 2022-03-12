@@ -29,8 +29,8 @@ struct Variable;
 struct Source_File;
 
 enum class Debugger_State : u8 {
-  NOT_STARTED,
-  ATTACHED,
+  NOT_LOADED,
+  LOADED,
   RUNNING,
   FINISHED // TODO: Handle finished state correctly
 };
@@ -52,12 +52,20 @@ struct Source_File {
   char *content = nullptr;
 };
 
+enum class Debug_Mode : u8 {
+  NONE,
+  ATTACH,
+  DEBUG_CHILD
+};
+
 struct Debugger {
   u32 debugee_pid = 0;
   char * executable_path = nullptr;
   char * argument_string = nullptr;
 
-  Debugger_State state = Debugger_State::NOT_STARTED;
+  Debug_Mode mode = Debug_Mode::NONE;
+
+  Debugger_State state = Debugger_State::NOT_LOADED;
   Command_Status last_command_status = Command_Status::NO_STATUS;
 
   Array<Breakpoint *> breakpoints;
@@ -76,9 +84,11 @@ void init(Debugger * dbg);
 void deinit(Debugger * dbg);
 
 void debug(Debugger * dbg, const char * executable_path, const char * arguments);
-void attach(Debugger * dbg, u32 pid);
-
 void unload(Debugger * dbg);
+
+void attach(Debugger * dbg, u32 pid);
+void detach(Debugger * dbg);
+
 
 //
 // Reading and writing

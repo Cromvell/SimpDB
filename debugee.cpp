@@ -59,6 +59,8 @@ int f() {
 int main() {
     printf("in debugee, process pid: %d\n", getpid());
 
+    // sleep(10);
+
     f();
     inline_func(42);
     inline_func(1337);
@@ -66,8 +68,6 @@ int main() {
     t_func(52);
 
     debugee2_call();
-
-    // sleep(1000);
 
     f();
 

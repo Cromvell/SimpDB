@@ -1,7 +1,19 @@
 DBG_NAMESPACE_BEGIN
 
+inline u8 inject_int_instruction(Debugger *dbg, u64 address) {
+  auto instruction = read_memory(dbg, address);
+
+  auto saved_instruction = static_cast<u8> (instruction & 0xff);
+
+  u64 int3 = 0xcc;
+  u64 injected_int3 = ((instruction & ~0xff) | int3);
+  write_memory(dbg, address, injected_int3);
+
+  return saved_instruction;
+}
+
 void enable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return;
   }
@@ -11,21 +23,22 @@ void enable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
     return;
   }
 
-  auto instruction = read_memory(dbg, breakpoint->address);
-
-  breakpoint->saved_instruction = static_cast<u8> (instruction & 0xff);
-
-  u64 int3 = 0xcc;
-  u64 injected_int3 = ((instruction & ~0xff) | int3);
-  write_memory(dbg, breakpoint->address, injected_int3);
-
+  breakpoint->saved_instruction = inject_int_instruction(dbg, breakpoint->address);
   breakpoint->enabled = true;
 
   dbg_success();
 }
 
+inline void remove_injected_int_instruction(Debugger *dbg, u64 address, u8 saved_instruction) {
+  auto instruction = read_memory(dbg, address);
+
+  u64 restored_instruction = ((instruction & ~0xff) | saved_instruction);
+
+  write_memory(dbg, address, restored_instruction);
+}
+
 void disable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return;
   }
@@ -35,12 +48,7 @@ void disable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
     return;
   }
 
-  auto instruction = read_memory(dbg, breakpoint->address);
-
-  u64 restored_instruction = ((instruction & ~0xff) | breakpoint->saved_instruction);
-
-  write_memory(dbg, breakpoint->address, restored_instruction);
-
+  remove_injected_int_instruction(dbg, breakpoint->address, breakpoint->saved_instruction);
   breakpoint->enabled = false;
 
   dbg_success();
@@ -52,7 +60,7 @@ void disable_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
 //
 
 Breakpoint *set_breakpoint(Debugger *dbg, u64 address) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return nullptr;
   }
@@ -71,7 +79,7 @@ Breakpoint *set_breakpoint(Debugger *dbg, u64 address) {
 }
 
 void remove_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return;
   }
@@ -101,7 +109,7 @@ void remove_breakpoint(Debugger *dbg, Breakpoint *breakpoint) {
 
 
 void remove_breakpoint(Debugger *dbg, u64 address) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return;
   }
@@ -239,7 +247,7 @@ bool match_function_declaration(dwarf::die function_die, Function_Declaration *d
 }
 
 Breakpoint *set_breakpoint(Debugger *dbg, const char *c_function_declaration_string) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return nullptr;
   }
@@ -302,7 +310,7 @@ bool is_suffix(const char *str, char *suffix) {
 }
 
 Breakpoint *set_breakpoint(Debugger *dbg, const char *c_file_name, u32 line) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return nullptr;
   }
@@ -343,6 +351,45 @@ void print_breakpoints(Debugger * dbg) {
   }
 
   dbg_success();
+}
+
+void update_breakpoints(Debugger *dbg) {
+  // Resetting breakpoint map, as breakpoint adresses as keys should be reinitialized
+  Hash_Table<u64, Breakpoint *> updated_breakpoint_map;
+  updated_breakpoint_map.init();
+
+  For_it (dbg->breakpoints, breakpoint) {
+    bool breakpoint_updated = false;
+
+    for (const auto &cu : dbg->dwarf.compilation_units()) {
+      const auto &lt = cu.get_line_table();
+
+      for (const auto &line_entry : lt) {
+        auto file = lt.get_file(line_entry.file_index);
+        auto location = breakpoint->location;
+
+        if (line_entry.is_stmt && is_suffix(file->path.c_str(), location.file_name) && line_entry.line == location.line) {
+          breakpoint->address = offset_dwarf_address(dbg, line_entry.address);
+
+          // Bulding new map with updated addresses
+          updated_breakpoint_map.insert(breakpoint->address, breakpoint);
+
+          // Inject instruction in newly loaded binary at breakpoint address
+          if (breakpoint->enabled) {
+            breakpoint->saved_instruction = inject_int_instruction(dbg, breakpoint->address);
+          }
+
+          breakpoint_updated = true;
+          break;
+        }
+      }
+
+      if (breakpoint_updated)  break;
+    }
+  }
+
+  dbg->breakpoint_map.deinit();
+  dbg->breakpoint_map = updated_breakpoint_map;
 }
 
 DBG_NAMESPACE_END

@@ -48,13 +48,19 @@ void show_code_panel() {
   if (ImGui::Begin("Code", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     if (ImGui::BeginTabBar("Files")) {
 
-      if (d->state == dbg::Debugger_State::NOT_STARTED) {
+      if (d->state == dbg::Debugger_State::NOT_LOADED) {
         ImGui::EndTabBar();
         ImGui::End();
         return;
       }
 
       auto sources = dbg::get_updated_sources(d);
+
+      if (sources.count <= 0) {
+        ImGui::EndTabBar();
+        ImGui::End();
+        return;
+      }
 
       Array<bool> is_tab_open;
       is_tab_open.init(sources.count);
@@ -337,7 +343,7 @@ void show_debugger_window() {
       switch (mode_idx) {
       case 0: {
         ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
-        bool is_debugger_loaded = (d->state != dbg::Debugger_State::NOT_STARTED);
+        bool is_debugger_loaded = (d->state != dbg::Debugger_State::NOT_LOADED);
         if (is_debugger_loaded) {
           input_flags |= ImGuiInputTextFlags_ReadOnly;
         }
@@ -354,11 +360,11 @@ void show_debugger_window() {
         if (ImGui::InputTextWithHint("##arguments", "program arguments", debug_arguments, IM_ARRAYSIZE(debug_arguments), input_flags)) {
         }
 
-        if (ImGui::MenuItem("Load debug session", NULL, false, d->state == dbg::Debugger_State::NOT_STARTED)) {
+        if (ImGui::MenuItem("Load debug session", NULL, false, d->state == dbg::Debugger_State::NOT_LOADED)) {
           dbg::debug(d, debug_path, debug_arguments);
         }
 
-        if (ImGui::MenuItem("Unload debug session", NULL, false, d->state == dbg::Debugger_State::ATTACHED)) {
+        if (ImGui::MenuItem("Unload debug session", NULL, false, d->state == dbg::Debugger_State::LOADED)) {
           if (d->state == dbg::Debugger_State::RUNNING) {
             dbg::stop(d);
           }
@@ -371,9 +377,9 @@ void show_debugger_window() {
         ImGui::Text("Process PID"); ImGui::SameLine();
 
         static s32 pid = 0;
-        ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
+        ImGuiInputTextFlags input_flags = ImGuiInputTextFlags_None;
 
-        bool is_debugger_loaded = (d->state != dbg::Debugger_State::NOT_STARTED);
+        bool is_debugger_loaded = (d->state != dbg::Debugger_State::NOT_LOADED);
         if (is_debugger_loaded) {
           input_flags |= ImGuiInputTextFlags_ReadOnly;
         }
@@ -381,15 +387,17 @@ void show_debugger_window() {
         if (ImGui::InputScalar("##pid", ImGuiDataType_U32, &pid, NULL, NULL, "%u", input_flags)) {
         }
 
-        if (ImGui::MenuItem("Attach to a process", NULL, false, d->state == dbg::Debugger_State::NOT_STARTED)) {
+        if (ImGui::MenuItem("Attach to a process", NULL, false, d->state == dbg::Debugger_State::NOT_LOADED)) {
           dbg::attach(d, (u32)pid);
         }
 
-        if (ImGui::MenuItem("Detach from a process", NULL, false, d->state == dbg::Debugger_State::ATTACHED)) {
+        if (ImGui::MenuItem("Detach from a process", NULL, false, d->state == dbg::Debugger_State::LOADED)) {
           if (d->state == dbg::Debugger_State::RUNNING) {
             dbg::stop(d);
           }
-          dbg::unload(d);
+          if (d->state == dbg::Debugger_State::LOADED) {
+            dbg::unload(d);
+          }
         }
         break;
       }
@@ -402,7 +410,7 @@ void show_debugger_window() {
 
     if (ImGui::BeginMenu("Debug")) {
       bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
-      if (ImGui::MenuItem("Start/Continue", "F5", false, d->state != dbg::Debugger_State::NOT_STARTED)) {
+      if (ImGui::MenuItem("Start/Continue", "F5", false, d->state != dbg::Debugger_State::NOT_LOADED)) {
         if (is_debugger_running) {
           dbg::continue_execution(d);
         } else {

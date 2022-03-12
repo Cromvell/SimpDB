@@ -4,15 +4,16 @@
 #include "declaration_parser.cpp"
 #include "breakpoint.cpp"
 
+#include <system_error>
+
 // Plan: Write out debugging lib, which can be used in ImGui graphical program
-// * Lib API
-//   * TODO: handle process termination correctly
-//   * Rename debugee to traced_process or something
+// * Rename debugee to traced_process or something
 // * Add conditional breakpoints
 // * Figure out how to deal with multiple breakpoints on one line. Currently setting up new breakpoint leak an old one.
+// * Handle files without source correctly
 // * process_vm_readv and process_vm_writev
-// * Deer ImGUI
-// * logger compatible with both terminal and ImGuI
+// * Logger compatible with both terminal and ImGuI
+// * Refactor declaration_parser with expected_token calls
 
 DBG_NAMESPACE_BEGIN
 
@@ -23,7 +24,8 @@ void init(Debugger * dbg) {
     dbg->breakpoints.init();
     dbg->breakpoint_map.init();
 
-    dbg->state = Debugger_State::NOT_STARTED;
+    dbg->mode = Debug_Mode::NONE;
+    dbg->state = Debugger_State::NOT_LOADED;
     dbg->last_command_status = dbg::Command_Status::NO_STATUS;
   }
 }
@@ -38,7 +40,7 @@ void deinit(Debugger * dbg) {
     dbg->breakpoints.deinit();
     dbg->breakpoint_map.deinit();
 
-    dbg->state = Debugger_State::NOT_STARTED;
+    dbg->state = Debugger_State::NOT_LOADED;
     dbg->last_command_status = dbg::Command_Status::NO_STATUS;
   }
 }
@@ -103,7 +105,7 @@ u64 pid_read_register(pid_t pid, Register r) {
 }
 
 u64 read_register(Debugger *dbg, Register r) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return 0;
   }
@@ -126,7 +128,7 @@ void write_register(pid_t pid, Register r, u64 value) {
 }
 
 void write_register(Debugger *dbg, Register r, u64 value) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return;
   }
@@ -175,7 +177,7 @@ inline char * register_to_string(Register reg) {
 //       Task: rewrite this to process_vm_readv and process_vm_writev (https://man7.org/linux/man-pages/man2/process_vm_readv.2.html)
 //          OR use /proc/<pid>/mem instead ptrace (compare options' performance and portability to other systems)
 u64 read_memory(Debugger *dbg, u64 address) {
-  if (dbg->state != Debugger_State::NOT_STARTED) {
+  if (dbg->state != Debugger_State::NOT_LOADED) {
     return ptrace(PTRACE_PEEKDATA, dbg->debugee_pid, address, nullptr);
 
   } else {
@@ -185,7 +187,7 @@ u64 read_memory(Debugger *dbg, u64 address) {
 }
 
 void write_memory(Debugger *dbg, u64 address, u64 value) {
-  if (dbg->state != Debugger_State::NOT_STARTED) {
+  if (dbg->state != Debugger_State::NOT_LOADED) {
     ptrace(PTRACE_POKEDATA, dbg->debugee_pid, address, value);
   } else {
     dbg_fail("debugged program isn't loaded");
@@ -292,7 +294,7 @@ s32 initialize_load_address(Debugger * dbg) {
 s32 load_debug_info(Debugger *dbg) {
   auto fd = open(dbg->executable_path, O_RDONLY);
 
-  if (!fd) {
+  if (fd == -1) {
     if (dbg->verbose)  printf("Error: Couldn't load debug info. File %s not exists.\n", dbg->executable_path);
     return 1;
   }
@@ -302,11 +304,17 @@ s32 load_debug_info(Debugger *dbg) {
   } catch (elf::format_error ex) {
     if (dbg->verbose)  printf("Error: Couldn't load file ELF info: %s\n", ex.what());
     return 2;
+  } catch (std::system_error ex) {
+    if (dbg->verbose)  printf("Error: Couldn't load file ELF info: %s\n", ex.what());
+    return 2;
   }
 
   try {
     dbg->dwarf = dwarf::dwarf(dwarf::elf::create_loader(dbg->elf));
   } catch (elf::format_error ex) {
+    if (dbg->verbose)  printf("Error: Couldn't load debug info from file: %s\n", ex.what());
+    return 3;
+  } catch (std::system_error ex) {
     if (dbg->verbose)  printf("Error: Couldn't load debug info from file: %s\n", ex.what());
     return 3;
   }
@@ -351,7 +359,8 @@ dwarf::line_table::iterator get_line_entry_from_pc(Debugger *dbg, u64 pc) {
   return dwarf::line_table::iterator(nullptr, 0);
 }
 
-// TODO: handle process termination correctly
+void restart_or_finish_debug(Debugger *dbg);
+
 void wait_for_signal(Debugger * dbg) {
   s32 wait_status;
   s32 options = 0;
@@ -366,8 +375,14 @@ void wait_for_signal(Debugger * dbg) {
   case SIGSEGV:
     printf("SEGFAULT! Reason: %d\n", siginfo.si_code);
     break;
+  case SIGSTOP: // ignored
+  case SIGWINCH:
+    break;
   default:
-    printf("Got signal %s\n", strsignal(siginfo.si_signo));
+    printf("Got signal %s (%d)\n", strsignal(siginfo.si_signo), siginfo.si_signo);
+
+    // If process terminated, halt the debugging session
+    restart_or_finish_debug(dbg);
     break;
   }
 }
@@ -377,8 +392,8 @@ void unload_sources(Debugger * dbg);
 
 // TODO: Handle arguments
 void debug(Debugger * dbg, const char * executable_path, const char * arguments) {
-  if (dbg->state != Debugger_State::NOT_STARTED) {
-    dbg_fail("could start debugging session only of NOT_STARTED process");
+  if (dbg->state != Debugger_State::NOT_LOADED) {
+    dbg_fail("could start debugging session only of NOT_LOADED process");
     return;
   }
 
@@ -417,15 +432,16 @@ void debug(Debugger * dbg, const char * executable_path, const char * arguments)
     load_sources(dbg);
 
     if (!fail) {
-      dbg->state = Debugger_State::ATTACHED;
+      dbg->mode = Debug_Mode::DEBUG_CHILD;
+      dbg->state = Debugger_State::LOADED;
       dbg_success();
     }
   }
 }
 
 void attach(Debugger * dbg, u32 pid) {
-  if (dbg->state != Debugger_State::NOT_STARTED) {
-    dbg_fail("could start debugging session only of NOT_STARTED process");
+  if (dbg->state != Debugger_State::NOT_LOADED) {
+    dbg_fail("could start debugging session only of NOT_LOADED process");
     return;
   }
 
@@ -438,7 +454,7 @@ void attach(Debugger * dbg, u32 pid) {
   dbg->executable_path = realpath(exe_link, nullptr);
 
   s32 fail = load_debug_info(dbg);
-  if (!fail) {
+  if (fail) {
     dbg->last_command_status = Command_Status::FAIL;
     return;
   }
@@ -449,14 +465,26 @@ void attach(Debugger * dbg, u32 pid) {
 
   load_sources(dbg);
 
-  if (fail) {
-    dbg->state = Debugger_State::ATTACHED;
+  if (!fail) {
+    dbg->mode = Debug_Mode::ATTACH;
+    dbg->state = Debugger_State::LOADED;
     dbg_success();
   }
 }
 
+void detach(Debugger * dbg) {
+  if (dbg->state == Debugger_State::RUNNING && dbg->mode == Debug_Mode::ATTACH) {
+    ptrace(PTRACE_DETACH, dbg->debugee_pid, nullptr, nullptr);
+
+    dbg->state = Debugger_State::LOADED;
+    dbg_success();
+  } else {
+    dbg_fail("could detach only in RUNNING state with debugger in ATTACH mode");
+  }
+}
+
 void unload(Debugger * dbg) {
-  if (dbg->state == Debugger_State::ATTACHED) {
+  if (dbg->state == Debugger_State::LOADED) {
     unload_sources(dbg);
 
     dbg->dwarf.~dwarf();
@@ -468,15 +496,15 @@ void unload(Debugger * dbg) {
     dbg->breakpoint_map.deinit();
     dbg->breakpoints.deinit();
 
-    dbg->state == Debugger_State::NOT_STARTED;
+    dbg->state = Debugger_State::NOT_LOADED;
     dbg_success();
   } else {
-    dbg_fail("could start debugger only in ATTACHED state");
+    dbg_fail("could unload debugger only in LOADED state");
   }
 }
 
 void start(Debugger *dbg) {
-  if (dbg->state == Debugger_State::ATTACHED) {
+  if (dbg->state == Debugger_State::LOADED) {
     dbg->state = Debugger_State::RUNNING;
 
     // Continuing execution after changin state to RUNNING
@@ -484,15 +512,58 @@ void start(Debugger *dbg) {
 
     // @Note: Not setting last_command_status as continue_execution do this
   } else {
-    dbg_fail("could start debugger only in ATTACHED state");
+    dbg_fail("could start debugger only in LOADED state");
   }
+}
+
+void restart_or_finish_debug(Debugger *dbg) {
+  switch (dbg->mode) {
+  case Debug_Mode::DEBUG_CHILD: {
+    auto pid = fork();
+
+    if (pid == 0) {
+      personality(ADDR_NO_RANDOMIZE);
+
+      ptrace(PTRACE_TRACEME, 0, nullptr, nullptr);
+      execl(dbg->executable_path, dbg->executable_path, nullptr);
+    } else if (pid >= 1) {
+      dbg->debugee_pid = pid;
+
+      wait_for_signal(dbg);
+
+      s32 fail = initialize_load_address(dbg);
+
+      if (!fail) {
+        dbg->state = Debugger_State::LOADED;
+
+        update_breakpoints(dbg);
+      } else {
+        dbg->state = Debugger_State::NOT_LOADED;
+        dbg_fail("couldn't restart debug session");
+      }
+    }
+    break;
+  }
+
+  case Debug_Mode::ATTACH:
+    if (dbg->state == Debugger_State::RUNNING) {
+      detach(dbg);
+    } else {
+      dbg_fail("could only detach from process in RUNNING state");
+    }
+    break;
+
+  default:
+    assert(false);
+    break;
+  }
+
+  dbg->state = Debugger_State::LOADED;
 }
 
 void stop(Debugger *dbg) {
   if (dbg->state == Debugger_State::RUNNING) {
-    dbg->state = Debugger_State::ATTACHED;
-
-    // TODO: Handle forked child process and attached situation differentely
+    restart_or_finish_debug(dbg);
 
     dbg_success();
   } else {
@@ -581,7 +652,7 @@ void unload_sources(Debugger * dbg) {
 }
 
 Array<Source_File> get_updated_sources(Debugger * dbg) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return Array<Source_File>();
   }
@@ -599,7 +670,7 @@ void print_sources(Array<Source_File> sources) {
 }
 
 Source_Location get_source_location(Debugger *dbg) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return (Source_Location){};
   }
@@ -621,7 +692,7 @@ Source_Location get_source_location(Debugger *dbg) {
 }
 
 Source_Context get_source_context(Debugger *dbg, u32 line_count) {
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return (Source_Context){};
   }
@@ -749,17 +820,6 @@ void step_over_breakpoint(Debugger *dbg) {
   }
 }
 
-void single_instruction_step_with_breakpoint_check(Debugger *dbg) {
-  bool on_breakpoint = dbg->breakpoint_map.exists(get_pc(dbg));
-  auto breakpoint = dbg->breakpoint_map[get_pc(dbg)];
-
-  if (on_breakpoint && breakpoint && (*breakpoint)->enabled) {
-    step_over_breakpoint(dbg);
-  } else {
-    step_single_instruction(dbg);
-  }
-}
-
 void continue_execution(Debugger *dbg) {
   if (dbg->state != Debugger_State::RUNNING) {
     dbg_fail("debugged program isn't running");
@@ -770,6 +830,17 @@ void continue_execution(Debugger *dbg) {
   ptrace(PTRACE_CONT, dbg->debugee_pid, nullptr, nullptr);
   wait_for_signal(dbg);
   dbg_success();
+}
+
+void single_instruction_step_with_breakpoint_check(Debugger *dbg) {
+  bool on_breakpoint = dbg->breakpoint_map.exists(get_pc(dbg));
+  auto breakpoint = dbg->breakpoint_map[get_pc(dbg)];
+
+  if (on_breakpoint && breakpoint && (*breakpoint)->enabled) {
+    step_over_breakpoint(dbg);
+  } else {
+    step_single_instruction(dbg);
+  }
 }
 
 void step_in(Debugger * dbg) {
@@ -1124,7 +1195,7 @@ Symbol_Type to_symbol_type(elf::stt symbol) {
 Array<Symbol> lookup_symbol(Debugger *dbg, const char *c_name) {
   Array<Symbol> syms;
 
-  if (dbg->state == Debugger_State::NOT_STARTED) {
+  if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
     return Array<Symbol>();
   }
