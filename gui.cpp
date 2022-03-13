@@ -23,28 +23,41 @@
 // #include "imgui/imgui_impl_opengl3.cpp" // TODO: Eleminate second TU
 #include "imgui/imgui_impl_sdl.cpp"
 
-// TODO: Refactor this to DebuggerGUI structure
-// struct DebuggerGUI { }
+struct Debugger_GUI {
+  dbg::Debugger debugger;
+  dbg::Debugger * d = &debugger;
 
-dbg::Debugger debugger;
-dbg::Debugger * d = &debugger;
+  dbg::Source_Location m_source_location;
+  dbg::Source_Location m_last_source_location;
+  Array<dbg::Frame> m_stack_trace;
 
-dbg::Source_Location g_source_location;
-dbg::Source_Location g_last_source_location;
-Array<dbg::Frame> g_stack_trace;
+  Array<dbg::Variable> m_local_variables;
 
-Array<dbg::Variable> g_local_variables;
+  void init_debugger() {
+    init(d);
+    d->verbose = true;
+  }
 
-void init_debugger(dbg::Debugger * dbg) {
-  init(dbg);
-  dbg->verbose = true;
-}
+  void deinit_debugger() {
+    deinit(d);
+  }
 
-void deinit_debugger(dbg::Debugger * dbg) {
-  deinit(dbg);
-}
+  void show_code_panel();
+  void show_breakpoints_panel();
+  void show_variables_panel();
+  void show_stack_panel();
+  void show_register_panel();
+  void show_symbols_panel();
+  void show_memory_panel();
+  void show_debugger_window();
 
-void show_code_panel() {
+  void update();
+  void draw() { show_debugger_window(); }
+
+  void loop_cleanup();
+};
+
+void Debugger_GUI::show_code_panel() {
   if (ImGui::Begin("Code", NULL, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     if (ImGui::BeginTabBar("Files")) {
 
@@ -148,7 +161,7 @@ void show_code_panel() {
   ImGui::End();
 }
 
-void show_breakpoints_panel() {
+void Debugger_GUI::show_breakpoints_panel() {
   if (ImGui::Begin("Breakpoints")) {
     if (ImGui::BeginTable("##breakpoints_table", 4)) {
       // Table header
@@ -205,7 +218,7 @@ void show_breakpoints_panel() {
   ImGui::End();
 }
 
-void show_variables_panel() {
+void Debugger_GUI::show_variables_panel() {
   if (ImGui::Begin("Local variables")) {
     if (ImGui::BeginTable("##variables_table", 3)) {
       // Header
@@ -214,7 +227,7 @@ void show_variables_panel() {
       ImGui::TableNextColumn(); ImGui::Text("Location");
       ImGui::TableNextRow();
 
-      For (g_local_variables) {
+      For (m_local_variables) {
         ImGui::TableNextColumn(); ImGui::Text("%s", it.name);
         ImGui::TableNextColumn(); ImGui::Text("%d", it.value);
         ImGui::TableNextColumn();
@@ -236,7 +249,7 @@ void show_variables_panel() {
   ImGui::End();
 }
 
-void show_stack_panel() {
+void Debugger_GUI::show_stack_panel() {
   if (ImGui::Begin("Stack trace")) {
     if (ImGui::BeginTable("##stack_table", 4)) {
 
@@ -248,7 +261,7 @@ void show_stack_panel() {
       ImGui::TableNextRow();
 
       u32 frame_id = 0;
-      For (g_stack_trace) {
+      For (m_stack_trace) {
         ImGui::TableNextColumn(); ImGui::Text("%d", frame_id);
         ImGui::TableNextColumn(); ImGui::Text("%s", it.function_name);
         ImGui::TableNextColumn(); ImGui::Text("%s:%d", it.location.file_name, it.location.line);
@@ -264,7 +277,7 @@ void show_stack_panel() {
   ImGui::End();
 }
 
-void show_register_panel() {
+void Debugger_GUI::show_register_panel() {
   if (ImGui::Begin("Registers")) {
     if (ImGui::BeginTable("##register_table", 2)) {
 
@@ -294,7 +307,7 @@ void show_register_panel() {
   ImGui::End();
 }
 
-void show_symbols_panel() {
+void Debugger_GUI::show_symbols_panel() {
   if (ImGui::Begin("Symbols")) {
     static char symbol_query[256];
     auto input_flags = ImGuiInputTextFlags_EnterReturnsTrue;
@@ -329,9 +342,9 @@ void show_symbols_panel() {
   ImGui::End();
 }
 
-void show_memory_panel() { }
+void Debugger_GUI::show_memory_panel() { }
 
-void show_debugger_window() {
+void Debugger_GUI::show_debugger_window() {
   ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
 
   if (ImGui::BeginMainMenuBar()) {
@@ -448,19 +461,19 @@ void show_debugger_window() {
   show_symbols_panel();
 }
 
-void debugger_update() {
+void Debugger_GUI::update() {
   bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
   static dbg::Debugger_State last_debugger_state = d->state;
 
   if (is_debugger_running) {
     if (last_debugger_state != dbg::Debugger_State::RUNNING) {
-      g_last_source_location = g_source_location = dbg::get_source_location(d);
+      m_last_source_location = m_source_location = dbg::get_source_location(d);
     } else {
-      g_last_source_location = g_source_location;
-      g_source_location = dbg::get_source_location(d);
+      m_last_source_location = m_source_location;
+      m_source_location = dbg::get_source_location(d);
 
-      g_local_variables = dbg::get_variables(d);
-      g_stack_trace = dbg::get_stack_trace(d);
+      m_local_variables = dbg::get_variables(d);
+      m_stack_trace = dbg::get_stack_trace(d);
     }
   }
 
@@ -491,8 +504,8 @@ void debugger_update() {
   last_debugger_state = d->state;
 }
 
-void debugger_loop_cleanup() {
-  g_local_variables.deinit();
+void Debugger_GUI::loop_cleanup() {
+  m_local_variables.deinit();
 }
 
 s32 main() {
@@ -536,7 +549,9 @@ s32 main() {
 
   ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-  init_debugger(&debugger);
+  // Initialize debugger
+  Debugger_GUI debugger_gui;
+  debugger_gui.init_debugger();
 
   bool done = false;
   while (!done) {
@@ -550,7 +565,7 @@ s32 main() {
         done = true;
     }
 
-    debugger_update();
+    debugger_gui.update();
 
     // Start the Dear ImGui frame
     ImGui_ImplOpenGL3_NewFrame();
@@ -558,7 +573,7 @@ s32 main() {
     ImGui::NewFrame();
 
     // ImGui::ShowDemoWindow(nullptr);
-    show_debugger_window();
+    debugger_gui.draw();
 
     ImGui::Render();
     glViewport(0, 0, (s32)io.DisplaySize.x, (s32)io.DisplaySize.y);
@@ -567,7 +582,7 @@ s32 main() {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(window);
 
-    debugger_loop_cleanup();
+    debugger_gui.loop_cleanup();
   }
 
   // Clean up
@@ -579,5 +594,5 @@ s32 main() {
   SDL_DestroyWindow(window);
   SDL_Quit();
 
-  deinit_debugger(&debugger);
+  debugger_gui.deinit_debugger();
 }
