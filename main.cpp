@@ -169,10 +169,12 @@ void debugger_loop(Debugger_GUI *debugger_gui) {
 
       default: assert(false && "Unknown debugger command");
       }
-      continue_command_thread();
 
       update_in_debugger_thread(debugger_gui);
     }
+
+    if (!Global_wait_for_command_finished) continue_command_thread();
+
     sleep(0.001); // @Hack: Think of a better solution
   }
 }
