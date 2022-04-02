@@ -33,8 +33,6 @@ struct Debugger_GUI {
 
   void update();
   void draw() { show_debugger_window(); }
-
-  void loop_cleanup();
 };
 
 void Debugger_GUI::show_code_panel() {

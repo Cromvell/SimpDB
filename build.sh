@@ -2,7 +2,8 @@
 
 LIB_ARGS="-I/usr/local/include/libelfin -L/usr/local/lib -ldwarf++ -lelf++"
 
-#g++ -g debugee.cpp -o debugee
+# Build target
+g++ -g targets/debugee.cpp -o debugee
 
 if [ "$#" -ge 1 ] ; then
     case $1 in
@@ -25,7 +26,7 @@ if [ "$#" -ge 1 ] ; then
         -test)
             echo "Building tests"
             # Mode 3: Building test program
-            g++ -g test.cpp $LIB_ARGS -o test
+            g++ -g tests/test.cpp $LIB_ARGS -o test
             ;;
 
         *)

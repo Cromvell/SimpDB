@@ -238,9 +238,6 @@ s32 main() {
     ImGui::StyleColorsDark();
     ImGui::StyleColorsClassic();
 
-    // ImGuiStyle& style = ImGui::GetStyle();
-    // style.FramePadding.y = 4;
-
     ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init(glsl_version);
 

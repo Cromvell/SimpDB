@@ -1,10 +1,10 @@
 #include <unistd.h>
 
-#include "defer.h"
-#include "common.h"
+#include "../defer.h"
+#include "../common.h"
 
-#include "debugger.h"
-#include "debugger.cpp"
+#include "../debugger.h"
+#include "../debugger.cpp"
 
 s32 main(s32 argc, char *argv[]) {
   dbg::Debugger debugger;
@@ -14,7 +14,11 @@ s32 main(s32 argc, char *argv[]) {
   dbg::init(d);
   defer { dbg::deinit(d); };
 
-  dbg::debug(d, "debugee", nullptr);
+  if (argc > 1) {
+    dbg::debug(d, argv[1], nullptr);
+  } else {
+    dbg::debug(d, "debugee", nullptr);
+  }
 
   // if (argc < 2)  return 1;
   // attach(d, atoi(argv[1]));
