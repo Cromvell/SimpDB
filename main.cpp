@@ -4,6 +4,17 @@
 #include "imgui/imgui_impl_sdl.h"
 #include "imgui/imgui_impl_opengl3.h"
 
+// Build all in one translation unit. Fuck slow linker
+#include "imgui/imgui.cpp"
+#include "imgui/imgui_demo.cpp"
+#include "imgui/imgui_draw.cpp"
+#include "imgui/imgui_tables.cpp"
+#include "imgui/imgui_widgets.cpp"
+#include "imgui/imgui_impl_sdl.cpp"
+
+// @Note: Include this above SDL_opengl.h is necessary to avoid names collision
+#include "imgui/imgui_impl_opengl3.cpp"
+
 #include <SDL.h>
 #include <SDL_opengl.h>
 
@@ -14,15 +25,6 @@
 
 #include "defer.h"
 #include "common.h"
-
-// Build all in one translation unit. Fuck slow linker
-#include "imgui/imgui.cpp"
-#include "imgui/imgui_demo.cpp"
-#include "imgui/imgui_draw.cpp"
-#include "imgui/imgui_tables.cpp"
-#include "imgui/imgui_widgets.cpp"
-// #include "imgui/imgui_impl_opengl3.cpp" // TODO: Eleminate second TU
-#include "imgui/imgui_impl_sdl.cpp"
 
 struct Source_Location;
 struct Debugger_GUI;
