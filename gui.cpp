@@ -1,27 +1,3 @@
-#include "debugger.h"
-
-#include "imgui/imgui.h"
-#include "imgui/imgui_impl_sdl.h"
-#include "imgui/imgui_impl_opengl3.h"
-
-#include <SDL.h>
-#include <SDL_opengl.h>
-
-#include <stdio.h>
-
-#include "defer.h"
-#include "common.h"
-
-// Build all in one translation unit. Fuck slow linker
-#include "debugger.cpp"
-
-#include "imgui/imgui.cpp"
-#include "imgui/imgui_demo.cpp"
-#include "imgui/imgui_draw.cpp"
-#include "imgui/imgui_tables.cpp"
-#include "imgui/imgui_widgets.cpp"
-// #include "imgui/imgui_impl_opengl3.cpp" // TODO: Eleminate second TU
-#include "imgui/imgui_impl_sdl.cpp"
 
 struct Debugger_GUI {
   dbg::Debugger debugger;
@@ -29,13 +5,17 @@ struct Debugger_GUI {
 
   dbg::Source_Location m_source_location;
   dbg::Source_Location m_last_source_location;
-  Array<dbg::Frame> m_stack_trace;
 
+  Array<dbg::Frame> m_stack_trace;
   Array<dbg::Variable> m_local_variables;
+  Array<u64> m_register_values;
+
+  dbg::Debugger_State m_last_debugger_state = d->state;
 
   void init_debugger() {
     init(d);
     d->verbose = true;
+    d->autorestart_enabled = true;
   }
 
   void deinit_debugger() {
@@ -109,9 +89,9 @@ void Debugger_GUI::show_code_panel() {
             
             if (ImGui::Button(line_number_buf)) {
               if (!breakpoint_exists_on_the_line) {
-                dbg::set_breakpoint(d, source.file_name, line_number);
+                send_command(SET_BREAKPOINT, source.file_name, line_number);
               } else {
-                dbg::remove_breakpoint(d, existing_breakpoint);
+                send_command(REMOVE_BREAKPOINT, existing_breakpoint);
               }
             }
 
@@ -133,8 +113,8 @@ void Debugger_GUI::show_code_panel() {
 
             // PC marker
             if (d->state == dbg::Debugger_State::RUNNING) {
-              auto pc_location = dbg::get_source_location(d);
-              if (d->last_command_status == dbg::Command_Status::SUCCESS) {
+              auto pc_location = m_source_location;
+              if (pc_location.file_path) {
                 if (strcmp(pc_location.file_path, source.file_path) == 0 && pc_location.line == line_number) {
                   const ImU32 pc_col = ImColor(ImVec4(1.0f, 1.0f, 0.2f, 1.0f));
                   const float32 pc_th = 4.0f;
@@ -178,7 +158,7 @@ void Debugger_GUI::show_breakpoints_panel() {
       }
 
       For (to_remove) {
-        dbg::remove_breakpoint(d, it);
+        send_command(REMOVE_BREAKPOINT, it);
       }
 
       // Breakpoints removed, so clear the list
@@ -204,9 +184,9 @@ void Debugger_GUI::show_breakpoints_panel() {
         // Change breakpoint state
         if (checkbox_enabled != it->enabled) {
           if (checkbox_enabled) {
-            dbg::enable_breakpoint(d, it);
+            send_command(ENABLE_BREAKPOINT, it);
           } else {
-            dbg::disable_breakpoint(d, it);
+            send_command(DISABLE_BREAKPOINT, it);
           }
         }
 
@@ -287,17 +267,12 @@ void Debugger_GUI::show_register_panel() {
       ImGui::TableNextRow();
 
       if (d->state == dbg::Debugger_State::RUNNING) {
-        u32 reg_id = 0;
-        while ((dbg::Register)reg_id < dbg::Register::UNKNOWN) {
-          auto reg = (dbg::Register)reg_id;
+        For_Pointer (m_register_values) {
+          auto reg = (dbg::Register)(it - m_register_values.data);
 
-          auto reg_value = dbg::read_register(d, reg);
-        
           ImGui::TableNextColumn(); ImGui::Text("%s", register_to_string(reg));
-          ImGui::TableNextColumn(); ImGui::Text("0x%lx", reg_value);
+          ImGui::TableNextColumn(); ImGui::Text("0x%lx", *it);
           ImGui::TableNextRow();
-
-          reg_id++;
         }
       }
 
@@ -319,7 +294,7 @@ void Debugger_GUI::show_symbols_panel() {
 
     static Array<dbg::Symbol> found_symbols;
     if ((query_entered || search_button_pressed) && strlen(symbol_query) > 0) {
-      found_symbols = dbg::lookup_symbol(d, symbol_query);
+      dbg::lookup_symbol(d, symbol_query, &found_symbols);
     }
 
     if (ImGui::BeginTable("##symbols_table", 3)) {
@@ -374,14 +349,14 @@ void Debugger_GUI::show_debugger_window() {
         }
 
         if (ImGui::MenuItem("Load debug session", NULL, false, d->state == dbg::Debugger_State::NOT_LOADED)) {
-          dbg::debug(d, debug_path, debug_arguments);
+          send_command(DEBUG, debug_path, debug_arguments);
         }
 
         if (ImGui::MenuItem("Unload debug session", NULL, false, d->state == dbg::Debugger_State::LOADED)) {
           if (d->state == dbg::Debugger_State::RUNNING) {
-            dbg::stop(d);
+            send_command(STOP);
           }
-          dbg::unload(d);
+          send_command(UNLOAD);
         }
         break;
       }
@@ -401,15 +376,15 @@ void Debugger_GUI::show_debugger_window() {
         }
 
         if (ImGui::MenuItem("Attach to a process", NULL, false, d->state == dbg::Debugger_State::NOT_LOADED)) {
-          dbg::attach(d, (u32)pid);
+          send_command(ATTACH, (u32)pid);
         }
 
         if (ImGui::MenuItem("Detach from a process", NULL, false, d->state == dbg::Debugger_State::LOADED)) {
           if (d->state == dbg::Debugger_State::RUNNING) {
-            dbg::stop(d);
+            send_command(STOP);
           }
           if (d->state == dbg::Debugger_State::LOADED) {
-            dbg::unload(d);
+            send_command(UNLOAD);
           }
         }
         break;
@@ -425,26 +400,26 @@ void Debugger_GUI::show_debugger_window() {
       bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
       if (ImGui::MenuItem("Start/Continue", "F5", false, d->state != dbg::Debugger_State::NOT_LOADED)) {
         if (is_debugger_running) {
-          dbg::continue_execution(d);
+          send_command(CONTINUE_EXECUTION);
         } else {
-          dbg::start(d);
+          send_command(START);
         }
       }
 
       if (ImGui::MenuItem("Stop", "Shift+F5", false, is_debugger_running)) {
-        dbg::stop(d);
+        send_command(STOP);
       }
 
       if (ImGui::MenuItem("Step over", "F10", false, is_debugger_running)) {
-        dbg::step_over(d);
+        send_command(STEP_OVER);
       }
 
       if (ImGui::MenuItem("Step in", "F11", false, is_debugger_running)) {
-        dbg::step_in(d);
+        send_command(STEP_IN);
       }
 
       if (ImGui::MenuItem("Step out", "Shift+F11", false, is_debugger_running)) {
-        dbg::step_out(d);
+        send_command(STEP_OUT);
       }
 
       ImGui::EndMenu();
@@ -461,138 +436,59 @@ void Debugger_GUI::show_debugger_window() {
   show_symbols_panel();
 }
 
-void Debugger_GUI::update() {
+// @Note: Running this function in the same thread as the debugger because
+//        functions calling ptrace require to be called from the same thread.
+void update_in_debugger_thread(Debugger_GUI *debugger_gui) {
+  auto &d = debugger_gui->d;
+
   bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
-  static dbg::Debugger_State last_debugger_state = d->state;
 
   if (is_debugger_running) {
-    if (last_debugger_state != dbg::Debugger_State::RUNNING) {
-      m_last_source_location = m_source_location = dbg::get_source_location(d);
+    if (debugger_gui->m_last_debugger_state != dbg::Debugger_State::RUNNING) {
+      debugger_gui->m_last_source_location = debugger_gui->m_source_location = dbg::get_source_location(d);
     } else {
-      m_last_source_location = m_source_location;
-      m_source_location = dbg::get_source_location(d);
+      debugger_gui->m_last_source_location = debugger_gui->m_source_location;
+      debugger_gui->m_source_location = dbg::get_source_location(d);
+    }
 
-      m_local_variables = dbg::get_variables(d);
-      m_stack_trace = dbg::get_stack_trace(d);
+    dbg::get_variables(d, &debugger_gui->m_local_variables);
+    dbg::get_stack_trace(d, &debugger_gui->m_stack_trace);
+    dbg::get_registers(d, &debugger_gui->m_register_values);
+  } else {
+    if (debugger_gui->m_last_debugger_state == dbg::Debugger_State::RUNNING) {
+      debugger_gui->m_local_variables.reset();
+      debugger_gui->m_stack_trace.reset();
+      debugger_gui->m_register_values.reset();
     }
   }
+}
+
+void Debugger_GUI::update() {
+  bool is_debugger_running = (d->state == dbg::Debugger_State::RUNNING);
 
   if (!ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F5)) {
     if (is_debugger_running) {
-      dbg::continue_execution(d);
+      send_command(CONTINUE_EXECUTION);
     } else {
-      dbg::start(d);
+      send_command(START);
     }
   }
 
   if (ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F5)) {
-    dbg::stop(d);
+    send_command(STOP);
   }
 
   if (ImGui::IsKeyPressed(ImGuiKey_F10)) {
-    dbg::step_over(d);
+    send_command(STEP_OVER);
   }
 
   if (!ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F11)) {
-    dbg::step_in(d);
+    send_command(STEP_IN);
   }
 
   if (ImGui::IsKeyDown(ImGuiKey_ModShift) && ImGui::IsKeyPressed(ImGuiKey_F11)) {
-    dbg::step_out(d);
+    send_command(STEP_OUT);
   }
 
-  last_debugger_state = d->state;
-}
-
-void Debugger_GUI::loop_cleanup() {
-  m_local_variables.deinit();
-}
-
-s32 main() {
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
-    printf("Error: %s\n", SDL_GetError());
-    return -1;
-  }
-
-  const char* glsl_version = "#version 130";
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-
-  // Create window with graphical context
-  SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-  SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-  SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-  SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
-  SDL_Window* window = SDL_CreateWindow("SimpDBG", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, window_flags);
-  SDL_GLContext gl_context = SDL_GL_CreateContext(window);
-  SDL_GL_MakeCurrent(window, gl_context);
-  SDL_GL_SetSwapInterval(1); // Enable vsync
-
-  // Setup Deer ImGui context
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGuiIO& io = ImGui::GetIO(); (void)io;
-
-  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-
-  ImGui::StyleColorsDark();
-  ImGui::StyleColorsClassic();
-
-  // ImGuiStyle& style = ImGui::GetStyle();
-  // style.FramePadding.y = 4;
-
-  ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
-  ImGui_ImplOpenGL3_Init(glsl_version);
-
-  ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
-  // Initialize debugger
-  Debugger_GUI debugger_gui;
-  debugger_gui.init_debugger();
-
-  bool done = false;
-  while (!done) {
-    // Poll and handle events
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT)
-        done = true;
-      if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(window))
-        done = true;
-    }
-
-    debugger_gui.update();
-
-    // Start the Dear ImGui frame
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    // ImGui::ShowDemoWindow(nullptr);
-    debugger_gui.draw();
-
-    ImGui::Render();
-    glViewport(0, 0, (s32)io.DisplaySize.x, (s32)io.DisplaySize.y);
-    glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
-    glClear(GL_COLOR_BUFFER_BIT);
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    SDL_GL_SwapWindow(window);
-
-    debugger_gui.loop_cleanup();
-  }
-
-  // Clean up
-  ImGui_ImplOpenGL3_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
-  ImGui::DestroyContext();
-
-  SDL_GL_DeleteContext(gl_context);
-  SDL_DestroyWindow(window);
-  SDL_Quit();
-
-  debugger_gui.deinit_debugger();
+  m_last_debugger_state = d->state;
 }

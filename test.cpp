@@ -42,7 +42,9 @@ s32 main(s32 argc, char *argv[]) {
   printf("END OF CONTEXT PRINT\n");
 
   dbg::continue_execution(d);
-  auto stack_trace1 = dbg::get_stack_trace(d);
+
+  Array<dbg::Frame> stack_trace1;
+  dbg::get_stack_trace(d, &stack_trace1);
   defer { deinit(stack_trace1); };
 
   printf("Stack trace at ");
@@ -76,7 +78,9 @@ s32 main(s32 argc, char *argv[]) {
   dbg::print_current_source_context(d, 1);
 
   dbg::print_current_source_location(d);
-  auto locals1 = dbg::get_variables(d);
+
+  Array<dbg::Variable> locals1;
+  dbg::get_variables(d, &locals1);
   defer { dbg::deinit(locals1); };
 
   print_variables(locals1);
@@ -84,7 +88,8 @@ s32 main(s32 argc, char *argv[]) {
   dbg::step_in(d);
   dbg::print_current_source_location(d);
 
-  auto stack_trace2 = dbg::get_stack_trace(d);
+  Array<dbg::Frame> stack_trace2;
+  dbg::get_stack_trace(d, &stack_trace2);
   defer { dbg::deinit(stack_trace2); };
 
   dbg::print_stack_trace(stack_trace2);
@@ -100,7 +105,8 @@ s32 main(s32 argc, char *argv[]) {
   dbg::continue_execution(d);
   dbg::print_current_source_location(d);
 
-  auto matched_names = dbg::lookup_symbol(d, "main");
+  Array<dbg::Symbol> matched_names;
+  dbg::lookup_symbol(d, "main", &matched_names);
   defer { dbg::deinit(matched_names); };
 
   printf("Symbols matched to main:\n");

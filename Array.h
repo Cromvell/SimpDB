@@ -110,8 +110,12 @@ void Array<T>::deinit() {
 
 template<typename T>
 void Array<T>::reset() {
-  memset(data, 0, count);
-  count = 0;
+  if (data) {
+    memset(data, 0, count);
+    count = 0;
+  } else {
+    this->init();
+  }
 }
 
 template<typename T>

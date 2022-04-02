@@ -32,7 +32,6 @@ enum class Debugger_State : u8 {
   NOT_LOADED,
   LOADED,
   RUNNING,
-  FINISHED // TODO: Handle finished state correctly
 };
 
 enum class Command_Status : u8 {
@@ -78,6 +77,7 @@ struct Debugger {
 
   u64 load_address = 0;
   bool verbose = false;
+  bool autorestart_enabled = false;
 };
 
 void init(Debugger * dbg);
@@ -111,6 +111,8 @@ void write_register(Debugger * dbg, Register reg, u64 value);
 
 u64 read_memory(Debugger * dbg, u64 address);
 void write_memory(Debugger * dbg, u64 address, u64 value);
+
+void get_registers(Debugger * dbg, Array<u64> * register_values);
 
 //
 // Location discovery
@@ -188,6 +190,7 @@ Breakpoint *set_breakpoint(Debugger * dbg, u64 address);
 Breakpoint *set_breakpoint(Debugger * dbg, const char * function_declaration);
 Breakpoint *set_breakpoint(Debugger * dbg, const char * filename, u32 line);
 
+// TODO: Implement conditional breakpoints
 void add_break_condition(Breakpoint * breakpoint, Register reg, u64 value, Break_Condition_Type condition_type);
 void add_break_condition(Breakpoint * breakpoint, u64 address,  u64 value, Break_Condition_Type condition_type);
 void add_break_condition(Breakpoint * breakpoint, const char * variable_name, u64 value, Break_Condition_Type condition_type);
@@ -223,7 +226,7 @@ struct Symbol {
   u64 address;
 };
 
-Array<Symbol> lookup_symbol(Debugger * dbg, const char * name);
+void lookup_symbol(Debugger * dbg, const char * name, Array<Symbol> * symbol_table);
 void deinit(Array<Symbol> symbol_table); // Symbols table should be freed after the use
 
 //
@@ -247,7 +250,7 @@ struct Frame {
   u64 address;
 };
 
-Array<Frame> get_stack_trace(Debugger * dbg);
+void get_stack_trace(Debugger * dbg, Array<Frame> * stack_trace);
 void deinit(Array<Frame> stack_trace); // Stack trace should be freed after the use
 
 void print_stack_trace(Array<Frame> stack_trace);
@@ -272,7 +275,7 @@ struct Variable {
   };
 };
 
-Array<Variable> get_variables(Debugger * dbg);
+void get_variables(Debugger * dbg, Array<Variable> * variables);
 void deinit(Array<Variable> variables); // Varables should be freed after the use
 
 void print_variables(Array<Variable> variables);

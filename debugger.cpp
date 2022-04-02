@@ -138,6 +138,25 @@ void write_register(Debugger *dbg, Register r, u64 value) {
   dbg_success();
 }
 
+void get_registers(Debugger * dbg, Array<u64> * register_values_pointer) {
+  if (!register_values_pointer) {
+    dbg_fail("pointer to output array is null");
+    return;
+  }
+
+  auto &register_values = *register_values_pointer;
+
+  register_values.reset();
+
+  user_regs_struct regs;
+  ptrace(PTRACE_GETREGS, dbg->debugee_pid, nullptr, &regs);
+
+  For_Count ((s32)Register::UNKNOWN, r) {
+    auto value = *(reinterpret_cast<u64 *> (&regs) + (u64)r);
+    register_values.add(value);
+  }
+}
+
 inline u64 get_pc(Debugger *dbg) {
   return read_register(dbg, Register::rip);
 }
@@ -377,12 +396,17 @@ void wait_for_signal(Debugger * dbg) {
     break;
   case SIGSTOP: // ignored
   case SIGWINCH:
+  case 53:
     break;
   default:
     printf("Got signal %s (%d)\n", strsignal(siginfo.si_signo), siginfo.si_signo);
 
     // If process terminated, halt the debugging session
-    restart_or_finish_debug(dbg);
+    if (dbg->autorestart_enabled) {
+      restart_or_finish_debug(dbg);
+    } else {
+      dbg->state == Debugger_State::LOADED;
+    }
     break;
   }
 }
@@ -563,7 +587,12 @@ void restart_or_finish_debug(Debugger *dbg) {
 
 void stop(Debugger *dbg) {
   if (dbg->state == Debugger_State::RUNNING) {
-    restart_or_finish_debug(dbg);
+
+    if (dbg->autorestart_enabled) {
+      restart_or_finish_debug(dbg);
+    } else {
+      dbg->state == Debugger_State::LOADED;
+    }
 
     dbg_success();
   } else {
@@ -1000,18 +1029,25 @@ private:
   u64 load_address;
 };
 
-Array<Variable> get_variables(Debugger *dbg) {
-  Array<Variable> variables;
+void get_variables(Debugger *dbg, Array<Variable> * variables_pointer) {
+  if (!variables_pointer) {
+    dbg_fail("pointer to output array is null");
+    return;
+  }
+
+  auto &variables = *variables_pointer;
+
+  variables.reset();
 
   if (dbg->state != Debugger_State::RUNNING) {
     dbg_fail("debugged program isn't running");
-    return Array<Variable>();
+    return;
   }
 
   auto func = get_function_from_pc(dbg, offset_load_address(dbg, get_pc(dbg)));
   if (dbg->last_command_status == Command_Status::FAIL) {
     dbg_fail("failed to find current function location");
-    return Array<Variable>();
+    return;
   }
 
   for (const auto &die : func) {
@@ -1047,7 +1083,6 @@ Array<Variable> get_variables(Debugger *dbg) {
   }
 
   dbg_success();
-  return variables;
 }
 
 void deinit(Array<Variable> variables) {
@@ -1108,18 +1143,25 @@ inline void add_function(Debugger *dbg, Array<Frame> *frames, dwarf::die functio
   frames->add((Frame){function_name, function_location, address});
 }
 
-Array<Frame> get_stack_trace(Debugger * dbg) {
-  Array<Frame> frames;
+void get_stack_trace(Debugger * dbg, Array<Frame> * frames_pointer) {
+  if (!frames_pointer) {
+    dbg_fail("pointer to output array is null");
+    return;
+  }
+
+  auto &frames = *frames_pointer;
+
+  frames.reset();
 
   if (dbg->state != Debugger_State::RUNNING) {
     dbg_fail("debugged program isn't running");
-    return Array<Frame>();
+    return;
   }
 
   auto func = get_function_from_pc(dbg, offset_load_address(dbg, get_pc(dbg)));
   if (dbg->last_command_status == Command_Status::FAIL) {
     dbg_fail("failed to find current function location");
-    return Array<Frame>();
+    return;
   }
 
   add_function(dbg, &frames, func);
@@ -1134,7 +1176,7 @@ Array<Frame> get_stack_trace(Debugger * dbg) {
     if (dbg->last_command_status == Command_Status::FAIL) {
       dbg_fail("failed to find function location");
       frames.deinit();
-      return Array<Frame>();
+      return;
     }
     add_function(dbg, &frames, iter);
 
@@ -1144,7 +1186,6 @@ Array<Frame> get_stack_trace(Debugger * dbg) {
   }
 
   dbg_success();
-  return frames;
 }
 
 void deinit(Array<Frame> stack_trace) {
@@ -1192,12 +1233,19 @@ Symbol_Type to_symbol_type(elf::stt symbol) {
   }
 }
 
-Array<Symbol> lookup_symbol(Debugger *dbg, const char *c_name) {
-  Array<Symbol> syms;
+void lookup_symbol(Debugger *dbg, const char *c_name, Array<Symbol> * symbols_pointer) {
+  if (!symbols_pointer) {
+    dbg_fail("pointer to output array is null");
+    return;
+  }
+
+  auto &syms = *symbols_pointer;
+
+  syms.reset();
 
   if (dbg->state == Debugger_State::NOT_LOADED) {
     dbg_fail("debugged program isn't loaded");
-    return Array<Symbol>();
+    return;
   }
 
   auto name = const_cast <char *>(c_name);
@@ -1238,7 +1286,6 @@ Array<Symbol> lookup_symbol(Debugger *dbg, const char *c_name) {
   }
 
   dbg_success();
-  return syms;
 }
 
 DBG_NAMESPACE_END
