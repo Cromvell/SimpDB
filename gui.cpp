@@ -207,7 +207,7 @@ void Debugger_GUI::show_variables_panel() {
 
       For (m_local_variables) {
         ImGui::TableNextColumn(); ImGui::Text("%s", it.name);
-        ImGui::TableNextColumn(); ImGui::Text("%d", it.value);
+        ImGui::TableNextColumn(); ImGui::Text("%d (0x%x)", it.value, it.value);
         ImGui::TableNextColumn();
 
         switch (it.location) {

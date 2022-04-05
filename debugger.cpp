@@ -198,7 +198,6 @@ inline char * register_to_string(Register reg) {
 u64 read_memory(Debugger *dbg, u64 address) {
   if (dbg->state != Debugger_State::NOT_LOADED) {
     return ptrace(PTRACE_PEEKDATA, dbg->debugee_pid, address, nullptr);
-
   } else {
     dbg_fail("debugged program isn't loaded");
     return 0;
@@ -1059,9 +1058,9 @@ void get_variables(Debugger *dbg, Array<Variable> * variables_pointer) {
 
         switch (result.location_type) {
         case dwarf::expr_result::type::address: {
-          auto value = read_memory(dbg, result.value);
+          auto address = result.value + 0x10;
+          auto value = read_memory(dbg, address);
           auto name = const_cast <char *>(die[dwarf::DW_AT::name].as_cstr(nullptr));
-          auto &address = result.value;
           variables.add((Variable){name, value, Variable_Location::MEMORY, address});
           break;
         }
